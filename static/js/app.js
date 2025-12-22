@@ -624,13 +624,18 @@ function renderConversations() {
     const container = document.getElementById('conversations-list');
 
     if (!conversations || conversations.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-icon">💬</div>
-                <p>No conversations yet</p>
-                <span>Add friends to start chatting!</span>
-            </div>
-        `;
+        // Don't show empty state on mobile
+        if (window.innerWidth < 768) {
+            container.innerHTML = '';
+        } else {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">💬</div>
+                    <p>No conversations yet</p>
+                    <span>Add friends to start chatting!</span>
+                </div>
+            `;
+        }
         return;
     }
 
@@ -952,25 +957,78 @@ function showMessageContextMenu(event, messageId, isSentByMe) {
     
     menu.style.display = 'block';
     
-    // Position menu to the left of cursor
-    const menuWidth = 180; // min-width from CSS
-    menu.style.left = (event.pageX - menuWidth - 10) + 'px';
-    menu.style.top = event.pageY + 'px';
+    // Improved positioning for both desktop and mobile
+    const menuWidth = 180;
+    const menuHeight = 100; // approximate height
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    let left = event.pageX - menuWidth - 10;
+    let top = event.pageY;
+    
+    // Adjust for mobile - center horizontally if too close to edges
+    if (viewportWidth < 768) {
+        left = Math.max(10, Math.min(left, viewportWidth - menuWidth - 10));
+        top = Math.max(10, Math.min(top, viewportHeight - menuHeight - 10));
+    }
+    
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
     
     // Set up button handlers
     const deleteBtn = document.getElementById('delete-message-btn');
     const editBtn = document.getElementById('edit-message-btn');
     
-    deleteBtn.onclick = () => deleteMessage(messageId);
-    editBtn.onclick = () => editMessage(messageId);
+    deleteBtn.onclick = () => {
+        deleteMessage(messageId);
+        menu.style.display = 'none';
+    };
+    editBtn.onclick = () => {
+        editMessage(messageId);
+        menu.style.display = 'none';
+    };
+    
+    // Close menu when clicking outside
+    const closeMenu = (e) => {
+        if (!menu.contains(e.target)) {
+            menu.style.display = 'none';
+            document.removeEventListener('click', closeMenu);
+            document.removeEventListener('touchstart', closeMenu);
+        }
+    };
+    
+    // Delay adding the listener to prevent immediate closure
+    setTimeout(() => {
+        document.addEventListener('click', closeMenu);
+        document.addEventListener('touchstart', closeMenu);
+    }, 100);
 }
 
 function handleLongPressStart(event, messageId, isSentByMe) {
     if (!isSentByMe) return;
     
+    // Store touch position for mobile
+    const touch = event.touches ? event.touches[0] : event;
+    const touchX = touch.clientX;
+    const touchY = touch.clientY;
+    
     longPressTimer = setTimeout(() => {
+        // Create a synthetic event with the stored position
+        const syntheticEvent = {
+            preventDefault: () => {},
+            pageX: touchX,
+            pageY: touchY,
+            clientX: touchX,
+            clientY: touchY
+        };
+        
         // Trigger context menu on long press
-        showMessageContextMenu(event, messageId, isSentByMe);
+        showMessageContextMenu(syntheticEvent, messageId, isSentByMe);
+        
+        // Add haptic feedback on mobile if available
+        if (navigator.vibrate) {
+            navigator.vibrate(50);
+        }
     }, 500); // 500ms long press
 }
 
