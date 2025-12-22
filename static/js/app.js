@@ -245,10 +245,32 @@ function setupEventListeners() {
     // Logout
     document.getElementById('logout-btn').addEventListener('click', async () => {
         try {
-            await supabaseClient.auth.signOut();
-            window.location.href = '/';
+            console.log('Logging out...');
+            
+            // Sign out from Supabase
+            const { error } = await supabaseClient.auth.signOut();
+            
+            if (error) {
+                console.error('Logout error:', error);
+                throw error;
+            }
+            
+            console.log('Logout successful');
+            
+            // Clear any local state
+            currentUser = null;
+            currentUserProfile = null;
+            currentChat = null;
+            conversations = [];
+            friends = [];
+            friendRequests = [];
+            
+            // Force redirect to login page
+            window.location.replace('/');
+            
         } catch (error) {
             console.error('Logout failed:', error);
+            showToast('Failed to logout', 'error');
         }
     });
 
