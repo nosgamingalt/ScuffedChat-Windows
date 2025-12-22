@@ -18,9 +18,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         currentUser = session.user;
+        
+        console.log('User authenticated:', currentUser.email);
 
         // Get user profile
-        const { data: profile } = await supabaseClient
+        const { data: profile, error: profileError } = await supabaseClient
             .from('profiles')
             .select('*')
             .eq('id', currentUser.id)
@@ -28,22 +30,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (profile) {
             currentUserProfile = profile;
+            console.log('Profile loaded:', profile.username);
             
             // Check if username is missing, temporary, or email-based (Google OAuth without username)
             const emailPrefix = currentUser.email.split('@')[0];
             const hasValidUsername = profile.username && 
                                     !profile.username.includes('@') && 
                                     profile.username !== emailPrefix &&
-                                    profile.username.length >= 3;
+                                    profile.username.length >= 3 &&
+                                    !profile.username.startsWith('user_');
             
             if (!hasValidUsername) {
+                console.log('Invalid username detected, showing setup modal');
+                updateUserProfile(); // Show the current (invalid) username
                 showUsernameSetupModal();
                 return; // Don't load app until username is set
             }
         } else {
+            console.log('No profile found, creating new profile');
             // Create profile if doesn't exist with temporary username
             const tempUsername = 'user_' + currentUser.id.substring(0, 8);
-            const { data: newProfile } = await supabaseClient
+            const { data: newProfile, error: insertError } = await supabaseClient
                 .from('profiles')
                 .insert({
                     id: currentUser.id,
@@ -54,9 +61,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                 })
                 .select()
                 .single();
+            
+            if (insertError) {
+                console.error('Profile creation error:', insertError);
+                throw insertError;
+            }
+            
             currentUserProfile = newProfile;
+            console.log('Profile created with temp username:', tempUsername);
             
             // Always show username setup for new profiles
+            updateUserProfile();
             showUsernameSetupModal();
             return; // Don't load app until username is set
         }
@@ -1084,26 +1099,39 @@ window.closeImageViewer = closeImageViewer;
 
 // Username Setup Modal
 function showUsernameSetupModal() {
+    console.log('showUsernameSetupModal called');
     const modal = document.getElementById('username-setup-modal');
     const form = document.getElementById('username-setup-form');
     const input = document.getElementById('setup-username-input');
     const error = document.getElementById('username-setup-error');
     
+    if (!modal) {
+        console.error('Username setup modal not found in DOM');
+        return;
+    }
+    
+    console.log('Displaying username setup modal');
     modal.style.display = 'flex';
     input.value = '';
     error.style.display = 'none';
+    
+    // Focus on input
+    setTimeout(() => input.focus(), 100);
     
     // Prevent closing modal by clicking outside
     modal.onclick = (e) => {
         if (e.target === modal) {
             e.stopPropagation();
             e.preventDefault();
+            console.log('Modal click prevented - username required');
         }
     };
     
     form.onsubmit = async (e) => {
         e.preventDefault();
         const username = input.value.trim();
+        
+        console.log('Username submitted:', username);
         
         if (username.length < 3 || username.length > 20) {
             error.textContent = 'Username must be 3-20 characters';
@@ -1137,13 +1165,20 @@ function showUsernameSetupModal() {
                 return;
             }
             
+            console.log('Updating username in database...');
+            
             // Update profile
             const { error: updateError } = await supabaseClient
                 .from('profiles')
                 .update({ username: username })
                 .eq('id', currentUser.id);
             
-            if (updateError) throw updateError;
+            if (updateError) {
+                console.error('Update error:', updateError);
+                throw updateError;
+            }
+            
+            console.log('Username updated successfully');
             
             currentUserProfile.username = username;
             updateUserProfile();
@@ -1151,6 +1186,7 @@ function showUsernameSetupModal() {
             showToast('Username set successfully!', 'success');
             
             // Now initialize the app
+            console.log('Initializing app...');
             await initializeApp();
             
         } catch (err) {
