@@ -76,7 +76,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             return; // Don't load app until username is set
         }
 
+        console.log('Updating user profile display');
         updateUserProfile();
+        console.log('Initializing app');
         await initializeApp();
     } catch (error) {
         console.error('Auth error:', error);
@@ -102,15 +104,26 @@ async function initializeApp() {
 
 function updateUserProfile() {
     if (currentUserProfile) {
-        document.getElementById('username').textContent = currentUserProfile.username;
+        const usernameElement = document.getElementById('username');
         const avatarElement = document.getElementById('user-avatar');
+        
+        if (!usernameElement || !avatarElement) {
+            console.error('Profile elements not found in DOM');
+            return;
+        }
+        
+        console.log('Updating profile display:', currentUserProfile.username);
+        usernameElement.textContent = currentUserProfile.username;
         
         // Show profile picture if available, otherwise show initial
         if (currentUserProfile.avatar) {
             avatarElement.innerHTML = `<img src="${currentUserProfile.avatar}" alt="Profile" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`;
         } else {
+            avatarElement.innerHTML = '';
             avatarElement.textContent = currentUserProfile.username.charAt(0).toUpperCase();
         }
+    } else {
+        console.error('currentUserProfile is null or undefined');
     }
 }
 
@@ -1459,34 +1472,6 @@ function openProfileEdit() {
         } catch (err) {
             console.error('Profile update error:', err);
             error.textContent = 'Failed to update profile';
-            error.style.display = 'block';
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Save Changes';
-        }
-    };
-}
-            }
-            
-            // Update profile
-            const { error: updateError } = await supabaseClient
-                .from('profiles')
-                .update({ username: username })
-                .eq('id', currentUser.id);
-            
-            if (updateError) throw updateError;
-            
-            currentUserProfile.username = username;
-            updateUserProfile();
-            modal.style.display = 'none';
-            showToast('Username updated successfully!', 'success');
-            
-            // Reload conversations to update display names
-            loadConversations();
-            
-        } catch (err) {
-            console.error('Profile update error:', err);
-            error.textContent = 'Failed to update username';
             error.style.display = 'block';
             const submitBtn = form.querySelector('button[type="submit"]');
             submitBtn.disabled = false;
