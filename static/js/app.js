@@ -145,10 +145,6 @@ function setupRealtimeSubscription() {
                     }
                     // Reload conversations
                     loadConversations();
-
-                    if (message.sender_id !== currentUser.id) {
-                        showToast('New message received!', 'success');
-                    }
                 }
             }
         )
