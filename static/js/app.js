@@ -491,35 +491,38 @@ async function handleImageUpload(e) {
         return;
     }
 
-    // Check file size (10MB limit)
-    if (file.size > 10 * 1024 * 1024) {
-        showToast('Image must be less than 10MB', 'error');
+    // Check file size (50MB limit)
+    if (file.size > 50 * 1024 * 1024) {
+        showToast('File must be less than 50MB', 'error');
         e.target.value = '';
         return;
     }
 
-    // Check if it's an image
-    if (!file.type.startsWith('image/')) {
-        showToast('Please select an image file', 'error');
+    // Check if it's an image or video
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    
+    if (!isImage && !isVideo) {
+        showToast('Please select an image or video file', 'error');
         e.target.value = '';
         return;
     }
 
     try {
-        showToast('Uploading image...', 'success');
+        showToast(isVideo ? 'Uploading video...' : 'Uploading image...', 'success');
 
-        // Convert image to base64 and send directly in message
+        // Convert image/video to base64 and send directly in message
         const reader = new FileReader();
         reader.onload = async function(event) {
             try {
-                const base64Image = event.target.result;
+                const base64Data = event.target.result;
 
-                // Send message with base64 image
+                // Send message with base64 image or video
                 const messageData = {
                     sender_id: currentUser.id,
                     receiver_id: currentChat.id,
-                    content: base64Image,
-                    type: 'image',
+                    content: base64Data,
+                    type: isVideo ? 'video' : 'image',
                     created_at: new Date().toISOString()
                 };
 
@@ -539,7 +542,7 @@ async function handleImageUpload(e) {
                 }
 
                 appendMessage(message, false);
-                showToast('Image sent!', 'success');
+                showToast(isVideo ? 'Video sent!' : 'Image sent!', 'success');
 
                 // Scroll to bottom
                 const container = document.getElementById('messages-container');
@@ -858,11 +861,14 @@ function appendMessage(message, received) {
 function createMessageHTML(message, received) {
     const hasExpiry = message.expires_at != null;
     const isImage = message.type === 'image';
+    const isVideo = message.type === 'video';
     const isEdited = message.edited || false;
     
     let contentHTML;
     if (isImage) {
         contentHTML = `<img src="${escapeHtml(message.content)}" alt="Image" class="message-image" loading="lazy" onclick="openImageViewer('${escapeHtml(message.content)}')">`;
+    } else if (isVideo) {
+        contentHTML = `<video src="${escapeHtml(message.content)}" class="message-video" controls preload="metadata"></video>`;
     } else {
         contentHTML = `<div class="message-content">${escapeHtml(message.content)}</div>`;
     }
