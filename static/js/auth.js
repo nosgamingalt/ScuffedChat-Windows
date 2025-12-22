@@ -234,3 +234,33 @@ document.head.appendChild(style);
 
 // Initialize particles
 createParticles();
+
+// Google Sign-In handler
+async function handleGoogleSignIn() {
+    try {
+        const { data, error } = await supabaseClient.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+                redirectTo: window.location.origin + '/app'
+            }
+        });
+
+        if (error) throw error;
+    } catch (error) {
+        console.error('Google sign-in error:', error);
+        showError('Failed to sign in with Google');
+    }
+}
+
+// Add event listeners for Google buttons
+document.addEventListener('DOMContentLoaded', () => {
+    const googleLoginBtn = document.getElementById('google-login-btn');
+    const googleSignupBtn = document.getElementById('google-signup-btn');
+    
+    if (googleLoginBtn) {
+        googleLoginBtn.addEventListener('click', handleGoogleSignIn);
+    }
+    if (googleSignupBtn) {
+        googleSignupBtn.addEventListener('click', handleGoogleSignIn);
+    }
+});
