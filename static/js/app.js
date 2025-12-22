@@ -888,7 +888,12 @@ window.openChat = async function (partnerId) {
     document.getElementById('sidebar').classList.add('hidden'); // Mobile
 
     // Update chat header
-    document.getElementById('chat-avatar').textContent = user.username.charAt(0).toUpperCase();
+    const chatAvatarElement = document.getElementById('chat-avatar');
+    if (user.avatar) {
+        chatAvatarElement.innerHTML = `<img src="${user.avatar}" alt="${escapeHtml(user.username)}">`;
+    } else {
+        chatAvatarElement.textContent = user.username.charAt(0).toUpperCase();
+    }
     document.getElementById('chat-username').textContent = user.username;
     document.getElementById('chat-status').textContent = 'Online';
 
