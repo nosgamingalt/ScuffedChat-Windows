@@ -992,55 +992,115 @@ async function editMessage(messageId) {
         
         // Get current message content
         const contentDiv = messageElement.querySelector('.message-content');
-        if (!contentDiv) return; // Can't edit image messages
+        if (!contentDiv) {
+            showToast('Cannot edit image messages', 'error');
+            return;
+        }
         
         const currentContent = contentDiv.textContent;
         
-        // Prompt for new content
-        const newContent = prompt('Edit message:', currentContent);
-        if (newContent === null || newContent.trim() === '' || newContent === currentContent) {
-            return; // User cancelled or no changes
-        }
+        // Show custom edit modal
+        showEditMessageModal(messageId, currentContent);
         
-        // Update in database
-        const { error } = await supabaseClient
-            .from('messages')
-            .update({ 
-                content: newContent.trim(),
-                edited: true,
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', messageId)
-            .eq('sender_id', currentUser.id);
-        
-        if (error) {
-            console.error('Edit error:', error);
-            throw error;
-        }
-        
-        // Update UI
-        contentDiv.textContent = newContent.trim();
-        
-        // Add edited indicator if not present
-        let editedSpan = messageElement.querySelector('.message-edited');
-        if (!editedSpan) {
-            editedSpan = document.createElement('span');
-            editedSpan.className = 'message-edited';
-            editedSpan.textContent = ' (edited)';
-            const timeDiv = messageElement.querySelector('.message-time');
-            if (timeDiv) {
-                timeDiv.appendChild(editedSpan);
-            }
-        }
-        
-        showToast('Message edited', 'success');
-        
-        // Reload conversations to update preview
-        loadConversations();
     } catch (error) {
-        console.error('Failed to edit message:', error);
-        showToast('Failed to edit message', 'error');
+        console.error('Failed to open edit message:', error);
+        showToast('Failed to open edit', 'error');
     }
+}
+
+function showEditMessageModal(messageId, currentContent) {
+    const modal = document.getElementById('edit-message-modal');
+    const form = document.getElementById('edit-message-form');
+    const textarea = document.getElementById('edit-message-textarea');
+    const error = document.getElementById('edit-message-error');
+    
+    modal.style.display = 'flex';
+    textarea.value = currentContent;
+    error.style.display = 'none';
+    
+    // Focus and select text
+    setTimeout(() => {
+        textarea.focus();
+        textarea.select();
+    }, 100);
+    
+    form.onsubmit = async (e) => {
+        e.preventDefault();
+        const newContent = textarea.value.trim();
+        
+        if (newContent === '') {
+            error.textContent = 'Message cannot be empty';
+            error.style.display = 'block';
+            return;
+        }
+        
+        if (newContent === currentContent) {
+            modal.style.display = 'none';
+            return;
+        }
+        
+        try {
+            const submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Saving...';
+            
+            // Update in database
+            const { error: updateError } = await supabaseClient
+                .from('messages')
+                .update({ 
+                    content: newContent,
+                    edited: true,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', messageId)
+                .eq('sender_id', currentUser.id);
+            
+            if (updateError) {
+                console.error('Edit error:', updateError);
+                throw updateError;
+            }
+            
+            // Update UI
+            const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+            if (messageElement) {
+                const contentDiv = messageElement.querySelector('.message-content');
+                if (contentDiv) {
+                    contentDiv.textContent = newContent;
+                }
+                
+                // Add edited indicator if not present
+                let editedSpan = messageElement.querySelector('.message-edited');
+                if (!editedSpan) {
+                    editedSpan = document.createElement('span');
+                    editedSpan.className = 'message-edited';
+                    editedSpan.textContent = '(edited)';
+                    const timeDiv = messageElement.querySelector('.message-time');
+                    if (timeDiv) {
+                        timeDiv.insertBefore(editedSpan, timeDiv.firstChild);
+                    }
+                }
+            }
+            
+            modal.style.display = 'none';
+            showToast('Message edited', 'success');
+            
+            // Reload conversations to update preview
+            loadConversations();
+            
+        } catch (err) {
+            console.error('Failed to edit message:', err);
+            error.textContent = 'Failed to edit message';
+            error.style.display = 'block';
+            const submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Save';
+        }
+    };
+}
+
+function closeEditMessageModal() {
+    const modal = document.getElementById('edit-message-modal');
+    modal.style.display = 'none';
 }
 
 async function deleteMessage(messageId) {
@@ -1286,3 +1346,4 @@ function closeProfileEditModal() {
 
 window.openProfileEdit = openProfileEdit;
 window.closeProfileEditModal = closeProfileEditModal;
+window.closeEditMessageModal = closeEditMessageModal;

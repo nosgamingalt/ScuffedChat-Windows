@@ -1714,6 +1714,26 @@ body {
     box-shadow: 0 0 0 3px rgba(255, 140, 0, 0.1);
 }
 
+.edit-message-textarea {
+    width: 100%;
+    padding: var(--spacing-md);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.95rem;
+    resize: vertical;
+    min-height: 100px;
+    transition: var(--transition-fast);
+}
+
+.edit-message-textarea:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(255, 140, 0, 0.1);
+}
+
 .modal-error {
     color: var(--accent-red);
     font-size: 0.85rem;

@@ -15,6 +15,9 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT false;
 -- Add updated_at column to track when message was last edited
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
 
+-- Drop the policy if it exists and recreate it
+DROP POLICY IF EXISTS "Users can update messages they sent (edit content)" ON messages;
+
 -- Create policy to allow users to update their own messages
 CREATE POLICY "Users can update messages they sent (edit content)" ON messages
     FOR UPDATE USING (auth.uid() = sender_id);
