@@ -29,18 +29,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (profile) {
             currentUserProfile = profile;
             
-            // Check if username is missing or is email-based (Google OAuth without username)
-            if (!profile.username || profile.username.includes('@') || profile.username === currentUser.email.split('@')[0]) {
+            // Check if username is missing, temporary, or email-based (Google OAuth without username)
+            const emailPrefix = currentUser.email.split('@')[0];
+            const hasValidUsername = profile.username && 
+                                    !profile.username.includes('@') && 
+                                    profile.username !== emailPrefix &&
+                                    profile.username.length >= 3;
+            
+            if (!hasValidUsername) {
                 showUsernameSetupModal();
+                return; // Don't load app until username is set
             }
         } else {
-            // Create profile if doesn't exist
-            const username = currentUser.user_metadata?.username || currentUser.email.split('@')[0];
+            // Create profile if doesn't exist with temporary username
+            const tempUsername = 'user_' + currentUser.id.substring(0, 8);
             const { data: newProfile } = await supabaseClient
                 .from('profiles')
                 .insert({
                     id: currentUser.id,
-                    username: username,
+                    username: tempUsername,
                     email: currentUser.email,
                     avatar: '',
                     created_at: new Date().toISOString()
@@ -49,19 +56,21 @@ document.addEventListener('DOMContentLoaded', async () => {
                 .single();
             currentUserProfile = newProfile;
             
-            // Show username setup for new profiles
-            if (username.includes('@') || username === currentUser.email.split('@')[0]) {
-                showUsernameSetupModal();
-            }
+            // Always show username setup for new profiles
+            showUsernameSetupModal();
+            return; // Don't load app until username is set
         }
 
         updateUserProfile();
+        await initializeApp();
     } catch (error) {
         console.error('Auth error:', error);
         window.location.href = '/';
         return;
     }
+});
 
+async function initializeApp() {
     // Load initial data
     await Promise.all([
         loadConversations(),
@@ -74,7 +83,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Setup event listeners
     setupEventListeners();
-});
+}
 
 function updateUserProfile() {
     if (currentUserProfile) {
@@ -1084,6 +1093,14 @@ function showUsernameSetupModal() {
     input.value = '';
     error.style.display = 'none';
     
+    // Prevent closing modal by clicking outside
+    modal.onclick = (e) => {
+        if (e.target === modal) {
+            e.stopPropagation();
+            e.preventDefault();
+        }
+    };
+    
     form.onsubmit = async (e) => {
         e.preventDefault();
         const username = input.value.trim();
@@ -1132,6 +1149,9 @@ function showUsernameSetupModal() {
             updateUserProfile();
             modal.style.display = 'none';
             showToast('Username set successfully!', 'success');
+            
+            // Now initialize the app
+            await initializeApp();
             
         } catch (err) {
             console.error('Username setup error:', err);
