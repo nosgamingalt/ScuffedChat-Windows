@@ -1881,6 +1881,9 @@ body {
 
     .chat-area {
         width: 100%;
+        position: fixed;
+        inset: 0;
+        z-index: 10;
     }
 
     .chat-active {
@@ -1888,12 +1891,15 @@ body {
         flex-direction: column;
         height: 100vh;
         height: 100dvh; /* Dynamic viewport height for mobile */
+        overflow: hidden;
     }
 
     .messages-container {
         flex: 1;
         overflow-y: auto;
         min-height: 0;
+        padding: var(--spacing-md);
+        -webkit-overflow-scrolling: touch;
     }
 
     .message-input-container {
@@ -1901,9 +1907,9 @@ body {
         padding: var(--spacing-sm) var(--spacing-md);
         background: var(--bg-card);
         border-top: 1px solid var(--border-subtle);
-        /* Remove any bottom margin/padding that pushes it down */
         margin-bottom: 0;
         padding-bottom: max(var(--spacing-sm), env(safe-area-inset-bottom));
+        flex-shrink: 0;
     }
 
     .btn-back {
