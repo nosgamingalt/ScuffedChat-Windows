@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS messages (
     receiver_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
     type TEXT DEFAULT 'text',
+    edited BOOLEAN DEFAULT false,
+    updated_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ,
     read_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -65,6 +67,9 @@ CREATE POLICY "Users can send messages" ON messages
 CREATE POLICY "Users can update messages they received (mark as read)" ON messages
     FOR UPDATE USING (auth.uid() = receiver_id);
 
+CREATE POLICY "Users can update messages they sent (edit content)" ON messages
+    FOR UPDATE USING (auth.uid() = sender_id);
+
 CREATE POLICY "Users can delete messages they sent" ON messages
     FOR DELETE USING (auth.uid() = sender_id);
 
@@ -81,6 +86,7 @@ CREATE POLICY "Users can update friend requests sent to them" ON friends
 CREATE POLICY "Users can delete their friendships" ON friends
     FOR DELETE USING (auth.uid() = user_id OR auth.uid() = friend_id);
 
--- Enable realtime for messages and friends tables
+-- Enable realtime for messages, friends, and profiles tables
 ALTER PUBLICATION supabase_realtime ADD TABLE messages;
 ALTER PUBLICATION supabase_realtime ADD TABLE friends;
+ALTER PUBLICATION supabase_realtime ADD TABLE profiles;

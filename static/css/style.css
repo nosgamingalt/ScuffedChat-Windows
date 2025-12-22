@@ -91,7 +91,8 @@ body {
     justify-content: center;
     padding: var(--spacing-lg);
     position: relative;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 /* Animated particles background */
@@ -1182,6 +1183,13 @@ body {
     color: var(--bg-dark);
 }
 
+.message-edited {
+    font-size: 0.7rem;
+    opacity: 0.6;
+    font-style: italic;
+    margin-right: 4px;
+}
+
 .message-disappear {
     display: inline-flex;
     align-items: center;
@@ -1445,7 +1453,14 @@ body {
 
 .context-menu-item:hover {
     background: var(--bg-input);
+}
+
+#delete-message-btn:hover {
     color: var(--accent-red);
+}
+
+#edit-message-btn:hover {
+    color: var(--accent-primary);
 }
 
 .context-menu-item svg {
@@ -1679,6 +1694,63 @@ body {
     background: rgba(255, 71, 87, 0.1);
 }
 
+/* Modal Input */
+.modal-input {
+    width: 100%;
+    padding: var(--spacing-md);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.95rem;
+    margin-bottom: var(--spacing-md);
+    transition: var(--transition-fast);
+}
+
+.modal-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(255, 140, 0, 0.1);
+}
+
+.modal-error {
+    color: var(--accent-red);
+    font-size: 0.85rem;
+    margin-top: -10px;
+    margin-bottom: var(--spacing-md);
+    text-align: center;
+}
+
+.btn-modal-primary {
+    width: 100%;
+    padding: var(--spacing-md);
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.btn-modal-primary:hover {
+    filter: brightness(1.1);
+    transform: translateY(-2px);
+}
+
+.btn-modal-primary:active {
+    transform: translateY(0);
+}
+
+.btn-modal-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
 /* ========================================
    Responsive Styles
    ======================================== */
@@ -1843,6 +1915,91 @@ body {
 
     .modal-body {
         padding: var(--spacing-lg);
+    }
+
+    /* Auth page mobile */
+    .auth-page {
+        align-items: center;
+        padding: var(--spacing-sm);
+        min-height: 100vh;
+        min-height: 100dvh;
+    }
+
+    .auth-container {
+        gap: var(--spacing-md);
+        padding-bottom: 0;
+        max-width: 100%;
+    }
+
+    .brand {
+        margin-top: 0;
+    }
+
+    .logo {
+        width: 100px;
+        height: 100px;
+        margin-bottom: var(--spacing-xs);
+    }
+
+    .brand-title {
+        font-size: 1.5rem;
+        margin-bottom: 2px;
+    }
+
+    .brand-tagline {
+        font-size: 0.75rem;
+        margin-top: 2px;
+    }
+
+    .auth-card {
+        max-width: 100%;
+        padding: var(--spacing-lg);
+    }
+
+    .auth-tabs {
+        margin-bottom: var(--spacing-md);
+    }
+
+    .form-group {
+        margin-bottom: var(--spacing-md);
+    }
+
+    .form-group label {
+        font-size: 0.8rem;
+        margin-bottom: 6px;
+    }
+
+    .form-group input {
+        padding: 10px 10px 10px 40px;
+        font-size: 0.9rem;
+    }
+
+    .input-icon {
+        bottom: 12px;
+        left: 12px;
+        width: 18px;
+        height: 18px;
+    }
+
+    .btn-primary {
+        padding: 12px var(--spacing-md);
+        font-size: 0.9rem;
+        margin-top: 6px;
+    }
+
+    .auth-divider {
+        margin: var(--spacing-md) 0;
+    }
+
+    .btn-google {
+        padding: 10px var(--spacing-md);
+        font-size: 0.85rem;
+    }
+
+    .auth-error {
+        font-size: 0.8rem;
+        padding: var(--spacing-sm);
+        margin-bottom: var(--spacing-md);
     }
 
     .modal-avatar {
