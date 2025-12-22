@@ -65,6 +65,9 @@ CREATE POLICY "Users can send messages" ON messages
 CREATE POLICY "Users can update messages they received (mark as read)" ON messages
     FOR UPDATE USING (auth.uid() = receiver_id);
 
+CREATE POLICY "Users can delete messages they sent" ON messages
+    FOR DELETE USING (auth.uid() = sender_id);
+
 -- Friends policies
 CREATE POLICY "Users can view their friendships" ON friends
     FOR SELECT USING (auth.uid() = user_id OR auth.uid() = friend_id);

@@ -83,9 +83,11 @@ function setupRealtimeSubscription() {
                 const message = payload.new;
                 // If message is for current user
                 if (message.receiver_id === currentUser.id || message.sender_id === currentUser.id) {
-                    // If in the right chat, add message
+                    // Only append if you're NOT the sender (to avoid duplicates)
                     if (currentChat && (message.sender_id === currentChat.id || message.receiver_id === currentChat.id)) {
-                        appendMessage(message, message.sender_id !== currentUser.id);
+                        if (message.sender_id !== currentUser.id) {
+                            appendMessage(message, true);
+                        }
                     }
                     // Reload conversations
                     loadConversations();
@@ -94,6 +96,19 @@ function setupRealtimeSubscription() {
                         showToast('New message received!', 'success');
                     }
                 }
+            }
+        )
+        .on('postgres_changes',
+            { event: 'DELETE', schema: 'public', table: 'messages' },
+            (payload) => {
+                const messageId = payload.old.id;
+                // Remove from UI
+                const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+                if (messageElement) {
+                    messageElement.remove();
+                }
+                // Reload conversations
+                loadConversations();
             }
         )
         .subscribe();
@@ -171,6 +186,18 @@ function setupEventListeners() {
             e.preventDefault();
             sendMessage();
         }
+    });
+
+    // Image upload
+    document.getElementById('image-btn').addEventListener('click', () => {
+        document.getElementById('image-input').click();
+    });
+
+    document.getElementById('image-input').addEventListener('change', handleImageUpload);
+
+    // Context menu for messages
+    document.addEventListener('click', () => {
+        document.getElementById('message-context-menu').style.display = 'none';
     });
 }
 
@@ -321,6 +348,87 @@ async function sendMessage() {
     } catch (error) {
         console.error('Failed to send message:', error);
         showToast('Failed to send message', 'error');
+    }
+}
+
+async function handleImageUpload(e) {
+    const file = e.target.files[0];
+    if (!file || !currentChat) {
+        showToast('No file selected or chat not open', 'error');
+        return;
+    }
+
+    // Check file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+        showToast('Image must be less than 10MB', 'error');
+        e.target.value = '';
+        return;
+    }
+
+    // Check if it's an image
+    if (!file.type.startsWith('image/')) {
+        showToast('Please select an image file', 'error');
+        e.target.value = '';
+        return;
+    }
+
+    try {
+        showToast('Uploading image...', 'success');
+
+        // Convert image to base64 and send directly in message
+        const reader = new FileReader();
+        reader.onload = async function(event) {
+            try {
+                const base64Image = event.target.result;
+
+                // Send message with base64 image
+                const messageData = {
+                    sender_id: currentUser.id,
+                    receiver_id: currentChat.id,
+                    content: base64Image,
+                    type: 'image',
+                    created_at: new Date().toISOString()
+                };
+
+                if (disappearingMode) {
+                    messageData.expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+                }
+
+                const { data: message, error } = await supabaseClient
+                    .from('messages')
+                    .insert(messageData)
+                    .select()
+                    .single();
+
+                if (error) {
+                    console.error('Database error:', error);
+                    throw error;
+                }
+
+                appendMessage(message, false);
+                showToast('Image sent!', 'success');
+
+                // Scroll to bottom
+                const container = document.getElementById('messages-container');
+                container.scrollTop = container.scrollHeight;
+
+            } catch (error) {
+                console.error('Failed to send image:', error);
+                showToast('Failed to send image: ' + error.message, 'error');
+            }
+        };
+
+        reader.onerror = function() {
+            showToast('Failed to read image file', 'error');
+        };
+
+        reader.readAsDataURL(file);
+
+    } catch (error) {
+        console.error('Failed to upload image:', error);
+        showToast('Failed to upload image: ' + error.message, 'error');
+    } finally {
+        e.target.value = '';
     }
 }
 
@@ -572,11 +680,19 @@ function appendMessage(message, received) {
 
 function createMessageHTML(message, received) {
     const hasExpiry = message.expires_at != null;
+    const isImage = message.type === 'image';
+    
+    let contentHTML;
+    if (isImage) {
+        contentHTML = `<img src="${escapeHtml(message.content)}" alt="Image" class="message-image" loading="lazy" onclick="openImageViewer('${escapeHtml(message.content)}')">`;
+    } else {
+        contentHTML = `<div class="message-content">${escapeHtml(message.content)}</div>`;
+    }
 
     return `
-        <div class="message ${received ? 'received' : 'sent'}">
+        <div class="message ${received ? 'received' : 'sent'}" data-message-id="${message.id}" oncontextmenu="showMessageContextMenu(event, ${message.id}, ${!received})">
             <div class="message-bubble">
-                <div class="message-content">${escapeHtml(message.content)}</div>
+                ${contentHTML}
                 <div class="message-time">
                     ${hasExpiry ? `
                         <span class="message-disappear">
@@ -720,3 +836,77 @@ function closeFriendRequestModal() {
     modal.style.display = 'none';
     document.body.style.overflow = '';
 }
+
+let selectedMessageId = null;
+
+function showMessageContextMenu(event, messageId, isSentByMe) {
+    event.preventDefault();
+    
+    if (!isSentByMe) return; // Only show context menu for messages you sent
+    
+    selectedMessageId = messageId;
+    const menu = document.getElementById('message-context-menu');
+    
+    menu.style.display = 'block';
+    
+    // Position menu to the left of cursor
+    const menuWidth = 180; // min-width from CSS
+    menu.style.left = (event.pageX - menuWidth - 10) + 'px';
+    menu.style.top = event.pageY + 'px';
+    
+    // Remove previous listener and add new one
+    const deleteBtn = document.getElementById('delete-message-btn');
+    deleteBtn.onclick = () => deleteMessage(messageId);
+}
+
+async function deleteMessage(messageId) {
+    try {
+        // Delete from database - only if you're the sender
+        const { error } = await supabaseClient
+            .from('messages')
+            .delete()
+            .eq('id', messageId)
+            .eq('sender_id', currentUser.id);
+
+        if (error) {
+            console.error('Delete error:', error);
+            throw error;
+        }
+
+        // Remove from UI
+        const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (messageElement) {
+            messageElement.remove();
+        }
+
+        // Hide context menu
+        document.getElementById('message-context-menu').style.display = 'none';
+        
+        showToast('Message deleted', 'success');
+        
+        // Reload conversations to update preview
+        loadConversations();
+    } catch (error) {
+        console.error('Failed to delete message:', error);
+        showToast('Failed to delete message', 'error');
+    }
+}
+
+window.showMessageContextMenu = showMessageContextMenu;
+
+function openImageViewer(imageSrc) {
+    const viewer = document.getElementById('image-viewer');
+    const img = document.getElementById('image-viewer-img');
+    img.src = imageSrc;
+    viewer.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closeImageViewer() {
+    const viewer = document.getElementById('image-viewer');
+    viewer.style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+window.openImageViewer = openImageViewer;
+window.closeImageViewer = closeImageViewer;
