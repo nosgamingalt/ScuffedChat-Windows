@@ -8,6 +8,36 @@ let friends = [];
 let friendRequests = [];
 let disappearingMode = false;
 let messageSubscription = null;
+let isOnline = navigator.onLine;
+let typingTimeout = null;
+let conversationsDebounce = null;
+let friendsDebounce = null;
+let lastConversationsLoad = 0;
+let lastFriendsLoad = 0;
+const DEBOUNCE_DELAY = 500; // ms
+const MIN_RELOAD_INTERVAL = 2000; // ms
+
+// Connection status tracking
+window.addEventListener('online', () => {
+    isOnline = true;
+    updateConnectionStatus();
+    showToast('Back online', 'success');
+});
+
+window.addEventListener('offline', () => {
+    isOnline = false;
+    updateConnectionStatus();
+    showToast('You are offline', 'error');
+});
+
+function updateConnectionStatus() {
+    const statusEl = document.querySelector('.status');
+    if (statusEl) {
+        statusEl.textContent = isOnline ? 'Online' : 'Offline';
+        statusEl.classList.toggle('online', isOnline);
+        statusEl.classList.toggle('offline', !isOnline);
+    }
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
     // Check authentication
@@ -87,6 +117,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
+// Cleanup on page unload to prevent connection leaks
+window.addEventListener('beforeunload', () => {
+    if (messageSubscription) {
+        messageSubscription.unsubscribe();
+    }
+    // Close all Supabase channels
+    supabaseClient.removeAllChannels();
+});
+
 async function initializeApp() {
     // Load initial data
     await Promise.all([
@@ -128,28 +167,34 @@ function updateUserProfile() {
 }
 
 function setupRealtimeSubscription() {
-    // Subscribe to new messages
+    // Subscribe to new messages - OPTIMIZED with filter
     messageSubscription = supabaseClient
         .channel('messages')
         .on('postgres_changes',
-            { event: 'INSERT', schema: 'public', table: 'messages' },
+            { 
+                event: 'INSERT', 
+                schema: 'public', 
+                table: 'messages',
+                filter: `receiver_id=eq.${currentUser.id}`
+            },
             (payload) => {
                 const message = payload.new;
-                // If message is for current user
-                if (message.receiver_id === currentUser.id || message.sender_id === currentUser.id) {
-                    // Only append if you're NOT the sender (to avoid duplicates)
-                    if (currentChat && (message.sender_id === currentChat.id || message.receiver_id === currentChat.id)) {
-                        if (message.sender_id !== currentUser.id) {
-                            appendMessage(message, true);
-                        }
+                // Only append if in current chat
+                if (currentChat && (message.sender_id === currentChat.id || message.receiver_id === currentChat.id)) {
+                    if (message.sender_id !== currentUser.id) {
+                        appendMessage(message, true);
                     }
-                    // Reload conversations
-                    loadConversations();
                 }
+                // Debounced reload
+                loadConversations();
             }
         )
         .on('postgres_changes',
-            { event: 'DELETE', schema: 'public', table: 'messages' },
+            { 
+                event: 'DELETE', 
+                schema: 'public', 
+                table: 'messages'
+            },
             (payload) => {
                 const messageId = payload.old.id;
                 // Remove from UI
@@ -157,12 +202,18 @@ function setupRealtimeSubscription() {
                 if (messageElement) {
                     messageElement.remove();
                 }
-                // Reload conversations
-                loadConversations();
+                // Debounced reload only if needed
+                if (!currentChat || conversations.length > 0) {
+                    loadConversations();
+                }
             }
         )
         .on('postgres_changes',
-            { event: 'UPDATE', schema: 'public', table: 'messages' },
+            { 
+                event: 'UPDATE', 
+                schema: 'public', 
+                table: 'messages'
+            },
             (payload) => {
                 const message = payload.new;
                 // Update message in UI if it's in the current chat
@@ -171,7 +222,7 @@ function setupRealtimeSubscription() {
                     if (messageElement && message.edited) {
                         const contentDiv = messageElement.querySelector('.message-content');
                         if (contentDiv) {
-                            contentDiv.textContent = message.content;
+                            contentDiv.innerHTML = linkifyText(message.content);
                             
                             // Add or update edited indicator
                             let editedSpan = messageElement.querySelector('.message-edited');
@@ -187,8 +238,10 @@ function setupRealtimeSubscription() {
                         }
                     }
                 }
-                // Reload conversations to update preview
-                loadConversations();
+                // Only reload if this message is in a visible conversation
+                if (conversations.some(c => c.user.id === message.sender_id || c.user.id === message.receiver_id)) {
+                    loadConversations();
+                }
             }
         )
         .subscribe();
@@ -219,18 +272,30 @@ function setupRealtimeSubscription() {
                     updateUserProfile();
                 }
                 
-                // Reload conversations to update display names
-                loadConversations();
+                // Only update if the profile change affects visible data
+                if (conversations.some(c => c.user.id === updatedProfile.id)) {
+                    loadConversations();
+                }
                 
-                // Reload friends list to update names
-                loadFriends();
+                if (friends.some(f => f.id === updatedProfile.id)) {
+                    loadFriends();
+                }
                 
-                // Reload friend requests to update names
-                loadFriendRequests();
+                if (friendRequests.some(r => r.from.id === updatedProfile.id)) {
+                    loadFriendRequests();
+                }
                 
-                // If currently chatting with this user, reload messages to update header
+                // If currently chatting with this user, update header only
                 if (currentChat && currentChat.id === updatedProfile.id) {
-                    openChat(currentChat.id);
+                    currentChat.username = updatedProfile.username;
+                    currentChat.avatar = updatedProfile.avatar;
+                    document.getElementById('chat-username').textContent = updatedProfile.username;
+                    const chatAvatarElement = document.getElementById('chat-avatar');
+                    if (updatedProfile.avatar) {
+                        chatAvatarElement.innerHTML = `<img src="${updatedProfile.avatar}" alt="${escapeHtml(updatedProfile.username)}">`;
+                    } else {
+                        chatAvatarElement.textContent = updatedProfile.username.charAt(0).toUpperCase();
+                    }
                 }
             }
         )
@@ -289,6 +354,12 @@ function setupEventListeners() {
         filterConversations(query);
     });
 
+    // Search friends
+    document.getElementById('search-friends').addEventListener('input', (e) => {
+        const query = e.target.value.toLowerCase();
+        filterFriends(query);
+    });
+
     // Add friend
     document.getElementById('add-friend-btn').addEventListener('click', addFriend);
     document.getElementById('add-friend-input').addEventListener('keypress', (e) => {
@@ -305,6 +376,9 @@ function setupEventListeners() {
         currentChat = null;
     });
 
+    // Clear chat button
+    document.getElementById('clear-chat-btn').addEventListener('click', clearChat);
+
     // Toggle disappearing messages
     document.getElementById('toggle-disappear').addEventListener('click', () => {
         disappearingMode = !disappearingMode;
@@ -314,11 +388,19 @@ function setupEventListeners() {
 
     // Send message
     document.getElementById('send-btn').addEventListener('click', sendMessage);
-    document.getElementById('message-input').addEventListener('keypress', (e) => {
+    
+    const messageInput = document.getElementById('message-input');
+    messageInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
         }
+    });
+    
+    // Update send button state based on input
+    messageInput.addEventListener('input', () => {
+        const sendBtn = document.getElementById('send-btn');
+        sendBtn.classList.toggle('has-content', messageInput.value.trim().length > 0);
     });
 
     // Image upload
@@ -332,18 +414,49 @@ function setupEventListeners() {
     document.addEventListener('click', () => {
         document.getElementById('message-context-menu').style.display = 'none';
     });
+    
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+        // Escape to close modals and menus
+        if (e.key === 'Escape') {
+            document.getElementById('message-context-menu').style.display = 'none';
+            closeEditMessageModal();
+            closeProfileEditModal();
+            closeImageViewer();
+            closeFriendRequestModal();
+        }
+        
+        // Focus message input with /
+        if (e.key === '/' && !e.target.closest('input, textarea')) {
+            e.preventDefault();
+            const input = document.getElementById('message-input');
+            if (input && currentChat) {
+                input.focus();
+            }
+        }
+    });
 }
 
 // API Functions using Supabase
 
 async function loadConversations() {
+    // Debounce to prevent excessive calls
+    const now = Date.now();
+    if (now - lastConversationsLoad < MIN_RELOAD_INTERVAL) {
+        if (conversationsDebounce) clearTimeout(conversationsDebounce);
+        conversationsDebounce = setTimeout(loadConversations, DEBOUNCE_DELAY);
+        return;
+    }
+    lastConversationsLoad = now;
+    
     try {
-        // Get messages where user is sender or receiver
+        // Optimized: Only get recent messages (last 100) with necessary fields
         const { data: messages, error } = await supabaseClient
             .from('messages')
-            .select('*, sender:profiles!messages_sender_id_fkey(*), receiver:profiles!messages_receiver_id_fkey(*)')
+            .select('id, sender_id, receiver_id, content, type, created_at, read_at, sender:profiles!messages_sender_id_fkey(id, username, avatar), receiver:profiles!messages_receiver_id_fkey(id, username, avatar)')
             .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(100);
 
         if (error) throw error;
 
@@ -361,7 +474,7 @@ async function loadConversations() {
                 });
             }
 
-            // Count unread
+            // Count unread (only in recent messages)
             if (msg.sender_id === partnerId && !msg.read_at) {
                 const conv = convMap.get(partnerId);
                 conv.unread_count++;
@@ -376,10 +489,20 @@ async function loadConversations() {
 }
 
 async function loadFriends() {
+    // Debounce to prevent excessive calls
+    const now = Date.now();
+    if (now - lastFriendsLoad < MIN_RELOAD_INTERVAL) {
+        if (friendsDebounce) clearTimeout(friendsDebounce);
+        friendsDebounce = setTimeout(loadFriends, DEBOUNCE_DELAY);
+        return;
+    }
+    lastFriendsLoad = now;
+    
     try {
+        // Optimized: Only select needed fields
         const { data, error } = await supabaseClient
             .from('friends')
-            .select('*, friend:profiles!friends_friend_id_fkey(*), user:profiles!friends_user_id_fkey(*)')
+            .select('id, user_id, friend_id, friend:profiles!friends_friend_id_fkey(id, username, avatar), user:profiles!friends_user_id_fkey(id, username, avatar)')
             .or(`user_id.eq.${currentUser.id},friend_id.eq.${currentUser.id}`)
             .eq('status', 'accepted');
 
@@ -398,11 +521,13 @@ async function loadFriends() {
 
 async function loadFriendRequests() {
     try {
+        // Optimized: Only select needed fields
         const { data, error } = await supabaseClient
             .from('friends')
-            .select('*, user:profiles!friends_user_id_fkey(*)')
+            .select('id, user_id, status, created_at, user:profiles!friends_user_id_fkey(id, username, avatar)')
             .eq('friend_id', currentUser.id)
-            .eq('status', 'pending');
+            .eq('status', 'pending')
+            .order('created_at', { ascending: false });
 
         if (error) throw error;
 
@@ -421,23 +546,29 @@ async function loadFriendRequests() {
 
 async function loadMessages(partnerId) {
     try {
+        // Optimized: Load only last 50 messages, select only needed fields
         const { data: messages, error } = await supabaseClient
             .from('messages')
-            .select('*, sender:profiles!messages_sender_id_fkey(*)')
+            .select('id, sender_id, receiver_id, content, type, created_at, expires_at, edited, updated_at')
             .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${partnerId}),and(sender_id.eq.${partnerId},receiver_id.eq.${currentUser.id})`)
-            .order('created_at', { ascending: true });
+            .order('created_at', { ascending: false })
+            .limit(50);
 
         if (error) throw error;
 
-        renderMessages(messages || []);
+        // Reverse to show oldest first
+        const sortedMessages = (messages || []).reverse();
+        renderMessages(sortedMessages);
 
-        // Mark messages as read
-        await supabaseClient
+        // Mark messages as read (batch operation)
+        const { error: updateError } = await supabaseClient
             .from('messages')
             .update({ read_at: new Date().toISOString() })
             .eq('sender_id', partnerId)
             .eq('receiver_id', currentUser.id)
             .is('read_at', null);
+
+        if (updateError) console.error('Failed to mark messages as read:', updateError);
 
     } catch (error) {
         console.error('Failed to load messages:', error);
@@ -614,12 +745,12 @@ async function addFriend() {
             return;
         }
 
-        // Check if already friends or pending
+        // Check if already friends or pending (optimized query)
         const { data: existing } = await supabaseClient
             .from('friends')
-            .select('*')
+            .select('id, status')
             .or(`and(user_id.eq.${currentUser.id},friend_id.eq.${user.id}),and(user_id.eq.${user.id},friend_id.eq.${currentUser.id})`)
-            .single();
+            .maybeSingle();
 
         if (existing) {
             showToast(existing.status === 'accepted' ? 'Already friends' : 'Request already pending', 'error');
@@ -692,8 +823,7 @@ async function removeFriend(friendId, friendUsername) {
             .from('friends')
             .select('id')
             .eq('status', 'accepted')
-            .or(`user_id.eq.${currentUser.id},friend_id.eq.${currentUser.id}`)
-            .or(`user_id.eq.${friendId},friend_id.eq.${friendId}`);
+            .or(`and(user_id.eq.${currentUser.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${currentUser.id})`);
 
         if (fetchError) throw fetchError;
 
@@ -719,6 +849,42 @@ async function removeFriend(friendId, friendUsername) {
     }
 }
 
+// Clear Chat Function
+async function clearChat() {
+    if (!currentChat) return;
+    
+    if (!confirm(`Clear all messages with ${currentChat.username}? This cannot be undone.`)) {
+        return;
+    }
+    
+    try {
+        // Delete all messages between current user and chat partner (both directions)
+        const { error } = await supabaseClient
+            .from('messages')
+            .delete()
+            .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${currentChat.id}),and(sender_id.eq.${currentChat.id},receiver_id.eq.${currentUser.id})`);
+        
+        if (error) throw error;
+        
+        // Clear UI
+        document.getElementById('messages-list').innerHTML = `
+            <div class="empty-state">
+                <p>No messages yet</p>
+                <span>Say hello! 👋</span>
+            </div>
+        `;
+        
+        showToast('Chat cleared', 'success');
+        
+        // Reload conversations to update the list
+        loadConversations();
+        
+    } catch (error) {
+        console.error('Failed to clear chat:', error);
+        showToast('Failed to clear chat', 'error');
+    }
+}
+
 // Render Functions
 
 function renderConversations() {
@@ -740,7 +906,20 @@ function renderConversations() {
         return;
     }
 
-    container.innerHTML = conversations.map(conv => `
+    container.innerHTML = conversations.map(conv => {
+        // Format last message preview
+        let previewText = 'Start a conversation';
+        if (conv.last_message) {
+            if (conv.last_message.type === 'image') {
+                previewText = '📷 Image';
+            } else if (conv.last_message.type === 'video') {
+                previewText = '🎥 Video';
+            } else {
+                previewText = escapeHtml(truncate(conv.last_message.content, 30));
+            }
+        }
+        
+        return `
         <button class="conversation-item ${currentChat && currentChat.id === conv.user.id ? 'active' : ''}" 
                 data-user-id="${conv.user.id}"
                 onclick="openChat('${conv.user.id}')">
@@ -755,12 +934,13 @@ function renderConversations() {
                     ` : ''}
                 </div>
                 <div class="conversation-preview">
-                    <span>${conv.last_message ? escapeHtml(truncate(conv.last_message.content, 30)) : 'Start a conversation'}</span>
+                    <span>${previewText}</span>
                     ${conv.unread_count > 0 ? `<span class="unread-badge">${conv.unread_count}</span>` : ''}
                 </div>
             </div>
         </button>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function filterConversations(query) {
@@ -768,6 +948,14 @@ function filterConversations(query) {
     items.forEach(item => {
         const username = item.querySelector('.conversation-username').textContent.toLowerCase();
         item.style.display = username.includes(query) ? '' : 'none';
+    });
+}
+
+function filterFriends(query) {
+    const items = document.querySelectorAll('.friends-list .friend-item');
+    items.forEach(item => {
+        const name = item.querySelector('.friend-name').textContent.toLowerCase();
+        item.style.display = name.includes(query) ? '' : 'none';
     });
 }
 
@@ -818,10 +1006,11 @@ function renderFriendRequests() {
     container.innerHTML = friendRequests.map(req => {
         const username = escapeHtml(req.from.username);
         const initial = req.from.username.charAt(0).toUpperCase();
+        const avatar = req.from.avatar;
         return `
             <div class="friend-item" data-request-id="${req.id}" data-username="${username}" style="cursor: pointer;">
                 <div class="avatar">
-                    <span>${initial}</span>
+                    ${avatar ? `<img src="${escapeHtml(avatar)}" alt="Avatar">` : `<span>${initial}</span>`}
                 </div>
                 <div class="friend-info">
                     <span class="friend-name">${username}</span>
@@ -880,6 +1069,17 @@ function appendMessage(message, received) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+// Make URLs clickable in messages
+function linkifyText(text) {
+    const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
+    const escaped = escapeHtml(text);
+    return escaped.replace(urlRegex, (url) => {
+        // Decode HTML entities for the href, keep escaped for display
+        const safeUrl = url.replace(/&amp;/g, '&');
+        return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="message-link">${url}</a>`;
+    });
+}
+
 function createMessageHTML(message, received) {
     const hasExpiry = message.expires_at != null;
     const isImage = message.type === 'image';
@@ -892,7 +1092,7 @@ function createMessageHTML(message, received) {
     } else if (isVideo) {
         contentHTML = `<video src="${escapeHtml(message.content)}" class="message-video" controls preload="metadata"></video>`;
     } else {
-        contentHTML = `<div class="message-content">${escapeHtml(message.content)}</div>`;
+        contentHTML = `<div class="message-content">${linkifyText(message.content)}</div>`;
     }
 
     return `

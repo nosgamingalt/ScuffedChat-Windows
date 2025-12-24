@@ -89,6 +89,15 @@
                     </button>
                 </div>
 
+                <!-- Search friends -->
+                <div class="search-box" style="margin-top: var(--spacing-sm);">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8" />
+                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                    <input type="text" placeholder="Search friends..." id="search-friends">
+                </div>
+
                 <!-- Friend requests -->
                 <div class="friend-section" id="friend-requests-section" style="display: none;">
                     <h3 class="section-title">Friend Requests</h3>
@@ -151,6 +160,12 @@
                         </div>
                     </div>
                     <div class="chat-actions">
+                        <button class="btn-icon" id="clear-chat-btn" title="Clear chat">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                            </svg>
+                        </button>
                         <button class="btn-icon" id="toggle-disappear" title="Toggle disappearing messages">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <circle cx="12" cy="12" r="10" />

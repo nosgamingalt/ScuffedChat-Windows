@@ -542,6 +542,10 @@ body {
     color: var(--accent-green);
 }
 
+.status.offline {
+    color: var(--accent-red);
+}
+
 .btn-icon {
     width: 40px;
     height: 40px;
@@ -1191,6 +1195,16 @@ body {
     line-height: 1.4;
 }
 
+.message-link {
+    color: var(--primary);
+    text-decoration: underline;
+    word-break: break-all;
+}
+
+.message-link:hover {
+    color: var(--primary-dark);
+}
+
 .message-image {
     max-width: 300px;
     max-height: 400px;
@@ -1368,6 +1382,11 @@ body {
     cursor: pointer;
     transition: var(--transition-fast);
     flex-shrink: 0;
+    opacity: 0.5;
+}
+
+.btn-send.has-content {
+    opacity: 1;
 }
 
 .btn-send:hover {
