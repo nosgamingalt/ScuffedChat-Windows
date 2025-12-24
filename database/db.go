@@ -16,8 +16,17 @@ var DB *sql.DB
 // Initialize sets up the PostgreSQL database connection
 func Initialize() error {
 	// Get PostgreSQL connection string from environment variable
-	// Format: postgresql://username:password@host:port/database?sslmode=require
-	connStr := os.Getenv("DATABASE_URL")
+	// Vercel prefixes environment variables with project name
+	connStr := os.Getenv("ScuffedChat_DATABASE_URL")
+	if connStr == "" {
+		// Fallback to standard DATABASE_URL
+		connStr = os.Getenv("DATABASE_URL")
+	}
+	if connStr == "" {
+		// Default to Neon database
+		connStr = "postgresql://neondb_owner:npg_D2wbWl5IAYFJ@ep-spring-star-adampjn1-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+		log.Println("Using default Neon database connection")
+	}
 	if connStr == "" {
 		// Default connection string for filess.io
 		// UPDATE THIS WITH YOUR ACTUAL CONNECTION STRING FROM filess.io
