@@ -20,7 +20,7 @@
     --text-secondary: rgba(255, 255, 255, 0.7);
     --text-muted: rgba(255, 255, 255, 0.4);
     
-    --accent-green: #00D26A;
+    --accent-green: #FFD60A;
     --accent-red: #FF4757;
     --accent-blue: #3B82F6;
     
@@ -2036,3 +2036,125 @@ body {
     background: var(--primary);
     color: var(--bg-dark);
 }
+
+/* Friend Context Menu */
+.friend-context-menu,
+.conversation-context-menu {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    min-width: 220px;
+    z-index: 1000;
+    animation: slideUp 0.2s ease-out;
+    overflow: hidden;
+}
+
+.context-menu-header {
+    padding: 12px 16px;
+    background: var(--bg-input);
+    font-weight: 600;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.context-menu-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    text-align: left;
+}
+
+.context-menu-item:hover {
+    background: var(--bg-input);
+}
+
+.context-menu-item svg {
+    flex-shrink: 0;
+}
+
+.context-menu-item.danger {
+    color: var(--accent-red);
+}
+
+.context-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.friend-menu-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    background: var(--bg-input);
+}
+
+.friend-menu-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-full);
+    background: var(--primary);
+    color: var(--bg-dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.friend-menu-username {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.friend-menu-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 4px 0;
+}
+
+.friend-menu-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    text-align: left;
+}
+
+.friend-menu-item:hover {
+    background: var(--bg-input);
+}
+
+.friend-menu-item svg {
+    flex-shrink: 0;
+}
+
+.friend-menu-item.danger {
+    color: var(--accent-red);
+}
+
+.friend-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.1);
+}
+

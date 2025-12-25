@@ -655,7 +655,10 @@ function renderConversations() {
         return `
         <button class="conversation-item ${currentChat && currentChat.id === conv.user.id ? 'active' : ''}" 
                 data-user-id="${conv.user.id}"
-                onclick="openChat('${conv.user.id}')">
+                onclick="openChat('${conv.user.id}')"
+                oncontextmenu="showConversationContextMenu(event, '${conv.user.id}', '${escapeHtml(conv.user.username)}')"
+                ontouchstart="handleConversationLongPressStart(event, '${conv.user.id}', '${escapeHtml(conv.user.username)}')"
+                ontouchend="handleConversationLongPressEnd(event)">
             <div class="avatar">
                 ${conv.user.avatar ? 
                     `<img src="${conv.user.avatar}" alt="${escapeHtml(conv.user.username)}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">` : 
@@ -710,13 +713,12 @@ function renderFriends() {
                     `<span>${friend.username.charAt(0).toUpperCase()}</span>`
                 }
             </div>
-            <div class="friend-info">
+            <div class="friend-info" onclick="showFriendMenu(event, '${friend.id}', '${escapeHtml(friend.username)}', '${friend.avatar || ''}')" style="cursor: pointer;">
                 <span class="friend-name">${escapeHtml(friend.username)}</span>
                 <span class="friend-status" style="color: ${isOnline ? 'var(--accent-green)' : 'var(--text-muted)'}">${isOnline ? 'Online' : 'Offline'}</span>
             </div>
             <div class="friend-actions">
                 <button class="btn-message" onclick="openChat('${friend.id}')">Message</button>
-                <button class="btn-decline" style="margin-left: 8px;" onclick="showUnfriendModal('${friend.id}', '${escapeHtml(friend.username)}', '${friend.avatar || ''}')">Remove</button>
             </div>
         </div>
         `;
@@ -1170,6 +1172,163 @@ function closeDeleteMessageModal() {
 
 let unfriendUserId = null;
 
+function showFriendMenu(event, userId, username, avatar) {
+    event.stopPropagation();
+    
+    // Remove any existing friend menu
+    const existingMenu = document.querySelector('.friend-context-menu');
+    if (existingMenu) {
+        existingMenu.remove();
+    }
+    
+    const menu = document.createElement('div');
+    menu.className = 'friend-context-menu';
+    menu.innerHTML = `
+        <div class="friend-menu-header">
+            <div class="friend-menu-avatar">
+                ${avatar ? 
+                    `<img src="${avatar}" alt="${username}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">` : 
+                    `<span>${username.charAt(0).toUpperCase()}</span>`
+                }
+            </div>
+            <div class="friend-menu-username">${username}</div>
+        </div>
+        <div class="friend-menu-divider"></div>
+        <button class="friend-menu-item" onclick="openChat('${userId}'); document.querySelector('.friend-context-menu').remove();">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span>Send Message</span>
+        </button>
+        <button class="friend-menu-item danger" onclick="showUnfriendModal('${userId}', '${username}', '${avatar}'); document.querySelector('.friend-context-menu').remove();">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="8.5" cy="7" r="4"></circle>
+                <line x1="18" y1="8" x2="23" y2="13"></line>
+                <line x1="23" y1="8" x2="18" y2="13"></line>
+            </svg>
+            <span>Remove Friend</span>
+        </button>
+    `;
+    
+    // Position the menu near the click
+    const rect = event.currentTarget.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = `${rect.bottom + 8}px`;
+    menu.style.left = `${rect.left}px`;
+    
+    document.body.appendChild(menu);
+    
+    // Close menu when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', function closeMenu(e) {
+            if (!menu.contains(e.target)) {
+                menu.remove();
+                document.removeEventListener('click', closeMenu);
+            }
+        });
+    }, 0);
+}
+
+let conversationLongPressTimer = null;
+
+function showConversationContextMenu(event, userId, username) {
+    event.preventDefault();
+    event.stopPropagation();
+    
+    // Remove any existing menu
+    const existingMenu = document.querySelector('.conversation-context-menu');
+    if (existingMenu) {
+        existingMenu.remove();
+    }
+    
+    const menu = document.createElement('div');
+    menu.className = 'conversation-context-menu';
+    menu.innerHTML = `
+        <div class="context-menu-header">${username}</div>
+        <button class="context-menu-item danger" onclick="deleteConversation('${userId}'); document.querySelector('.conversation-context-menu').remove();">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            <span>Delete Chat</span>
+        </button>
+    `;
+    
+    // Position the menu
+    menu.style.position = 'fixed';
+    menu.style.top = `${event.clientY}px`;
+    menu.style.left = `${event.clientX}px`;
+    
+    document.body.appendChild(menu);
+    
+    // Adjust position if menu goes off screen
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+        menu.style.left = `${window.innerWidth - rect.width - 10}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+        menu.style.top = `${window.innerHeight - rect.height - 10}px`;
+    }
+    
+    // Close menu when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', function closeMenu(e) {
+            if (!menu.contains(e.target)) {
+                menu.remove();
+                document.removeEventListener('click', closeMenu);
+            }
+        });
+    }, 0);
+}
+
+function handleConversationLongPressStart(event, userId, username) {
+    conversationLongPressTimer = setTimeout(() => {
+        // Trigger haptic feedback on mobile
+        if (navigator.vibrate) {
+            navigator.vibrate(50);
+        }
+        showConversationContextMenu(event, userId, username);
+    }, 500); // 500ms long press
+}
+
+function handleConversationLongPressEnd(event) {
+    if (conversationLongPressTimer) {
+        clearTimeout(conversationLongPressTimer);
+        conversationLongPressTimer = null;
+    }
+}
+
+async function deleteConversation(userId) {
+    try {
+        // Delete all messages between current user and the selected user
+        const { error } = await supabaseClient
+            .from('messages')
+            .delete()
+            .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${currentUser.id})`);
+        
+        if (error) {
+            console.error('Error deleting conversation:', error);
+            showToast('Failed to delete chat', 'error');
+            return;
+        }
+        
+        // Reload conversations
+        await loadConversations();
+        
+        // If currently viewing this chat, close it
+        if (selectedUserId === userId) {
+            selectedUserId = null;
+            document.getElementById('chat-area').classList.remove('active');
+        }
+        
+        showToast('Chat deleted successfully', 'success');
+    } catch (error) {
+        console.error('Error deleting conversation:', error);
+        showToast('Failed to delete chat', 'error');
+    }
+}
+
 function showUnfriendModal(userId, username, avatar) {
     unfriendUserId = userId;
     const modal = document.getElementById('unfriend-modal');
@@ -1184,7 +1343,8 @@ function showUnfriendModal(userId, username, avatar) {
     // Set up confirm button
     const confirmBtn = document.getElementById('confirm-unfriend-btn');
     confirmBtn.onclick = () => unfriendUser(userId);
-}
+}FriendMenu = showFriendMenu;
+window.show
 
 function closeUnfriendModal() {
     const modal = document.getElementById('unfriend-modal');
@@ -1242,6 +1402,10 @@ window.handleLongPressStart = handleLongPressStart;
 window.handleLongPressEnd = handleLongPressEnd;
 window.closeEditMessageModal = closeEditMessageModal;
 window.closeDeleteMessageModal = closeDeleteMessageModal;
+window.showConversationContextMenu = showConversationContextMenu;
+window.handleConversationLongPressStart = handleConversationLongPressStart;
+window.handleConversationLongPressEnd = handleConversationLongPressEnd;
+window.deleteConversation = deleteConversation;
 window.showUnfriendModal = showUnfriendModal;
 window.closeUnfriendModal = closeUnfriendModal;
 
