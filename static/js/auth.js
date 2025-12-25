@@ -1,6 +1,13 @@
 // Auth.js - Handles login and signup with Supabase
 
-document.addEventListener('DOMContentLoaded', () => {
+// Wait for Supabase to be initialized
+if (window.supabaseClient) {
+    initializeAuth();
+} else {
+    window.addEventListener('supabase-ready', initializeAuth);
+}
+
+function initializeAuth() {
     // Check if already logged in
     checkAuth();
 
@@ -126,7 +133,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     .insert({
                         id: authData.user.id,
                         username: username,
-                        email: email,
                         avatar: '',
                         created_at: new Date().toISOString()
                     });
@@ -172,7 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function hideError() {
         errorDiv.classList.remove('show');
     }
-});
+}
 
 // Check if user is already authenticated
 async function checkAuth() {

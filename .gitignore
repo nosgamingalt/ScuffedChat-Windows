@@ -1,6 +1,14 @@
-# Binaries
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Compiled binary
 scuffedsnap
+
+# Go build artifacts
 *.exe
+*.exe~
 *.dll
 *.so
 *.dylib
@@ -11,34 +19,19 @@ scuffedsnap
 # Output of the go coverage tool
 *.out
 
-# Database files
-*.db
-*.db-shm
-*.db-wal
-
-# Environment variables
-.env
-.env.local
+# Dependency directories
+vendor/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Dependencies
-vendor/
-
-# Build artifacts
-dist/
-build/
-
-# Vercel
-.vercel
-
-# Downloaded packages
-*.deb
+# Logs
+*.log

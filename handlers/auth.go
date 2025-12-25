@@ -190,6 +190,25 @@ func Me(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(user.ToResponse())
 }
 
+// GetSession returns the current session info
+func GetSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	user := middleware.GetUserFromContext(r)
+	if user == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"session": nil,
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"session": map[string]interface{}{
+			"user": user.ToResponse(),
+		},
+	})
+}
+
 func generateSessionID() string {
 	bytes := make([]byte, 32)
 	rand.Read(bytes)

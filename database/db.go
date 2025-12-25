@@ -2,7 +2,6 @@ package database
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
 	"os"
 	"time"
@@ -13,531 +12,531 @@ import (
 
 var DB *sql.DB
 
-// Initialize sets up the PostgreSQL database connection
+// Initialize sets up the database connection and creates tables
 func Initialize() error {
-	// Get PostgreSQL connection string from environment variable
-	// Vercel prefixes environment variables with project name
-	connStr := os.Getenv("ScuffedChat_DATABASE_URL")
-	if connStr == "" {
-		// Fallback to standard DATABASE_URL
-		connStr = os.Getenv("DATABASE_URL")
-	}
-	if connStr == "" {
-		// Default to Neon database
-		connStr = "postgresql://neondb_owner:npg_D2wbWl5IAYFJ@ep-spring-star-adampjn1-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
-		log.Println("Using default Neon database connection")
-	}
-	if connStr == "" {
-		// Default connection string for filess.io
-		// UPDATE THIS WITH YOUR ACTUAL CONNECTION STRING FROM filess.io
-		connStr = "postgresql://username:password@host:port/database?sslmode=require"
-		log.Println("WARNING: Using default DATABASE_URL. Set environment variable for production!")
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL environment variable is required")
 	}
 
 	var err error
-	DB, err = sql.Open("postgres", connStr)
+	DB, err = sql.Open("postgres", databaseURL)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
 
-	// Test the connection
+	// Test connection
 	if err := DB.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %w", err)
+		return err
 	}
 
-	// Set connection pool settings (optimized for filess.io)
-	DB.SetMaxOpenConns(20)
+	// Set connection pool settings
+	DB.SetMaxOpenConns(25)
 	DB.SetMaxIdleConns(5)
 	DB.SetConnMaxLifetime(5 * time.Minute)
-	DB.SetConnMaxIdleTime(1 * time.Minute)
 
-	log.Println("PostgreSQL database connected successfully")
+	// Create tables
+	if err := createTables(); err != nil {
+		return err
+	}
+
+	log.Println("Database initialized successfully")
 	return nil
+}
+
+func createTables() error {
+	tables := `
+	CREATE TABLE IF NOT EXISTS users (
+		id BIGSERIAL PRIMARY KEY,
+		username TEXT UNIQUE NOT NULL,
+		email TEXT UNIQUE NOT NULL,
+		password TEXT NOT NULL,
+		avatar TEXT DEFAULT '',
+		auth_method TEXT DEFAULT 'email',
+		is_disabled BOOLEAN DEFAULT FALSE,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS sessions (
+		id TEXT PRIMARY KEY,
+		user_id BIGINT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		expires_at TIMESTAMP NOT NULL,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS messages (
+		id BIGSERIAL PRIMARY KEY,
+		sender_id BIGINT NOT NULL,
+		receiver_id BIGINT NOT NULL,
+		content TEXT NOT NULL,
+		type TEXT DEFAULT 'text',
+		expires_at TIMESTAMP,
+		read_at TIMESTAMP,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS friends (
+		id BIGSERIAL PRIMARY KEY,
+		user_id BIGINT NOT NULL,
+		friend_id BIGINT NOT NULL,
+		status TEXT DEFAULT 'pending',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (friend_id) REFERENCES users(id) ON DELETE CASCADE,
+		UNIQUE(user_id, friend_id)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+	CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id);
+	CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id);
+	CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id);
+	CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+	`
+
+	_, err := DB.Exec(tables)
+	return err
 }
 
 // User queries
 
 // CreateUser inserts a new user into the database
 func CreateUser(username, email, password string) (*models.User, error) {
-	user := &models.User{
-		Username: username,
-		Email:    email,
-	}
+	return CreateUserWithAuth(username, email, password, "email")
+}
 
-	query := `
-		INSERT INTO profiles (username, email, password_hash, created_at) 
-		VALUES ($1, $2, $3, NOW())
-		RETURNING id, created_at, avatar
-	`
-
-	err := DB.QueryRow(query, username, email, password).Scan(
-		&user.ID,
-		&user.CreatedAt,
-		&user.Avatar,
+// CreateUserWithAuth inserts a new user with auth method tracking
+func CreateUserWithAuth(username, email, password, authMethod string) (*models.User, error) {
+	result, err := DB.Exec(
+		"INSERT INTO users (username, email, password, auth_method) VALUES (?, ?, ?, ?)",
+		username, email, password, authMethod,
 	)
 	if err != nil {
 		return nil, err
 	}
 
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	return GetUserByID(id)
+}
+
+// GetUserByID retrieves a user by their ID
+func GetUserByID(id int64) (*models.User, error) {
+	user := &models.User{}
+	err := DB.QueryRow(
+		"SELECT id, username, email, password, avatar, created_at, COALESCE(auth_method, 'email'), COALESCE(is_disabled, 0) FROM users WHERE id = ?",
+		id,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.Password, &user.Avatar, &user.CreatedAt, &user.AuthMethod, &user.IsDisabled)
+	if err != nil {
+		return nil, err
+	}
 	return user, nil
 }
 
-// GetUserByUsername retrieves a user by username
+// GetUserByUsername retrieves a user by their username
 func GetUserByUsername(username string) (*models.User, error) {
 	user := &models.User{}
-	query := `
-		SELECT id, username, email, password_hash, avatar, created_at 
-		FROM profiles 
-		WHERE username = $1
-	`
-
-	err := DB.QueryRow(query, username).Scan(
-		&user.ID,
-		&user.Username,
-		&user.Email,
-		&user.Password,
-		&user.Avatar,
-		&user.CreatedAt,
-	)
+	err := DB.QueryRow(
+		"SELECT id, username, email, password, avatar, created_at, COALESCE(auth_method, 'email'), COALESCE(is_disabled, 0) FROM users WHERE username = ?",
+		username,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.Password, &user.Avatar, &user.CreatedAt, &user.AuthMethod, &user.IsDisabled)
 	if err != nil {
 		return nil, err
 	}
-
 	return user, nil
 }
 
-// GetUserByEmail retrieves a user by email
+// GetUserByEmail retrieves a user by their email
 func GetUserByEmail(email string) (*models.User, error) {
 	user := &models.User{}
-	query := `
-		SELECT id, username, email, password_hash, avatar, created_at 
-		FROM profiles 
-		WHERE email = $1
-	`
+	err := DB.QueryRow(
+		"SELECT id, username, email, password, avatar, created_at, COALESCE(auth_method, 'email'), COALESCE(is_disabled, 0) FROM users WHERE email = ?",
+		email,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.Password, &user.Avatar, &user.CreatedAt, &user.AuthMethod, &user.IsDisabled)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
 
-	err := DB.QueryRow(query, email).Scan(
-		&user.ID,
-		&user.Username,
-		&user.Email,
-		&user.Password,
-		&user.Avatar,
-		&user.CreatedAt,
+// SearchUsers searches for users by username
+func SearchUsers(query string, currentUserID int64) ([]models.UserResponse, error) {
+	rows, err := DB.Query(
+		`SELECT id, username, email, avatar, created_at FROM users 
+		WHERE username LIKE ? AND id != ? LIMIT 20`,
+		"%"+query+"%", currentUserID,
 	)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	return user, nil
-}
-
-// GetUserByID retrieves a user by ID
-func GetUserByID(id string) (*models.User, error) {
-	user := &models.User{}
-	query := `
-		SELECT id, username, email, avatar, created_at 
-		FROM profiles 
-		WHERE id = $1
-	`
-
-	err := DB.QueryRow(query, id).Scan(
-		&user.ID,
-		&user.Username,
-		&user.Email,
-		&user.Avatar,
-		&user.CreatedAt,
-	)
-	if err != nil {
-		return nil, err
+	var users []models.UserResponse
+	for rows.Next() {
+		var user models.UserResponse
+		if err := rows.Scan(&user.ID, &user.Username, &user.Email, &user.Avatar, &user.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, user)
 	}
-
-	return user, nil
-}
-
-// UpdateUser updates a user's information
-func UpdateUser(id string, username, email, avatar string) error {
-	query := `
-		UPDATE profiles 
-		SET username = $1, email = $2, avatar = $3 
-		WHERE id = $4
-	`
-
-	_, err := DB.Exec(query, username, email, avatar, id)
-	return err
+	return users, nil
 }
 
 // Session queries
 
 // CreateSession creates a new session for a user
-func CreateSession(sessionID, userID string, expiresAt time.Time) error {
-	query := `
-		INSERT INTO sessions (id, user_id, created_at, expires_at) 
-		VALUES ($1, $2, NOW(), $3)
-	`
-
-	_, err := DB.Exec(query, sessionID, userID, expiresAt)
+func CreateSession(sessionID string, userID int64, expiresAt time.Time) error {
+	_, err := DB.Exec(
+		"INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)",
+		sessionID, userID, expiresAt,
+	)
 	return err
 }
 
-// GetSession retrieves a session by ID
+// GetSession retrieves a session by its ID
 func GetSession(sessionID string) (*models.Session, error) {
 	session := &models.Session{}
-	query := `
-		SELECT id, user_id, created_at, expires_at 
-		FROM sessions 
-		WHERE id = $1 AND expires_at > NOW()
-	`
-
-	err := DB.QueryRow(query, sessionID).Scan(
-		&session.ID,
-		&session.UserID,
-		&session.CreatedAt,
-		&session.ExpiresAt,
-	)
+	err := DB.QueryRow(
+		"SELECT id, user_id, created_at, expires_at FROM sessions WHERE id = ? AND expires_at > datetime('now')",
+		sessionID,
+	).Scan(&session.ID, &session.UserID, &session.CreatedAt, &session.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
-
 	return session, nil
 }
 
 // DeleteSession removes a session
 func DeleteSession(sessionID string) error {
-	query := `DELETE FROM sessions WHERE id = $1`
-	_, err := DB.Exec(query, sessionID)
+	_, err := DB.Exec("DELETE FROM sessions WHERE id = ?", sessionID)
 	return err
 }
 
-// CleanupExpiredSessions removes all expired sessions
-func CleanupExpiredSessions() error {
-	_, err := DB.Exec("SELECT cleanup_expired_sessions()")
+// DeleteUserSessions removes all sessions for a user
+func DeleteUserSessions(userID int64) error {
+	_, err := DB.Exec("DELETE FROM sessions WHERE user_id = ?", userID)
 	return err
 }
 
 // Message queries
 
-// CreateMessage inserts a new message
-func CreateMessage(senderID, receiverID, content, msgType string, expiresAt *time.Time) (*models.Message, error) {
-	message := &models.Message{
-		SenderID:   senderID,
-		ReceiverID: receiverID,
-		Content:    content,
-		Type:       msgType,
-	}
-
-	query := `
-		INSERT INTO messages (sender_id, receiver_id, content, type, expires_at, created_at) 
-		VALUES ($1, $2, $3, $4, $5, NOW())
-		RETURNING id, created_at
-	`
-
-	err := DB.QueryRow(query, senderID, receiverID, content, msgType, expiresAt).Scan(
-		&message.ID,
-		&message.CreatedAt,
+// CreateMessage creates a new message
+func CreateMessage(senderID, receiverID int64, content, msgType string, expiresAt *time.Time) (*models.Message, error) {
+	result, err := DB.Exec(
+		"INSERT INTO messages (sender_id, receiver_id, content, type, expires_at) VALUES (?, ?, ?, ?, ?)",
+		senderID, receiverID, content, msgType, expiresAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	message.ExpiresAt = expiresAt
-	return message, nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	return GetMessageByID(id)
 }
 
-// GetMessages retrieves messages between two users with limit
-func GetMessages(userID, partnerID string, limit int) ([]models.Message, error) {
-	query := `
-		SELECT id, sender_id, receiver_id, content, type, edited, 
-		       updated_at, expires_at, read_at, created_at
-		FROM get_conversation_messages($1::UUID, $2::UUID, $3)
-		ORDER BY created_at DESC
-	`
+// GetMessageByID retrieves a message by its ID
+func GetMessageByID(id int64) (*models.Message, error) {
+	msg := &models.Message{}
+	err := DB.QueryRow(
+		"SELECT id, sender_id, receiver_id, content, type, expires_at, read_at, created_at FROM messages WHERE id = ?",
+		id,
+	).Scan(&msg.ID, &msg.SenderID, &msg.ReceiverID, &msg.Content, &msg.Type, &msg.ExpiresAt, &msg.ReadAt, &msg.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
 
-	rows, err := DB.Query(query, userID, partnerID, limit)
+// GetMessagesBetweenUsers retrieves messages between two users
+func GetMessagesBetweenUsers(userID1, userID2 int64, limit, offset int) ([]models.MessageWithSender, error) {
+	rows, err := DB.Query(
+		`SELECT m.id, m.sender_id, m.receiver_id, m.content, m.type, m.expires_at, m.read_at, m.created_at,
+		        u.username, u.avatar
+		FROM messages m
+		JOIN users u ON m.sender_id = u.id
+		WHERE ((m.sender_id = ? AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = ?))
+		  AND (m.expires_at IS NULL OR m.expires_at > datetime('now'))
+		ORDER BY m.created_at DESC
+		LIMIT ? OFFSET ?`,
+		userID1, userID2, userID2, userID1, limit, offset,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var messages []models.Message
+	var messages []models.MessageWithSender
 	for rows.Next() {
-		var msg models.Message
-		err := rows.Scan(
-			&msg.ID,
-			&msg.SenderID,
-			&msg.ReceiverID,
-			&msg.Content,
-			&msg.Type,
-			&msg.Edited,
-			&msg.UpdatedAt,
-			&msg.ExpiresAt,
-			&msg.ReadAt,
-			&msg.CreatedAt,
-		)
-		if err != nil {
+		var msg models.MessageWithSender
+		if err := rows.Scan(
+			&msg.ID, &msg.SenderID, &msg.ReceiverID, &msg.Content, &msg.Type,
+			&msg.ExpiresAt, &msg.ReadAt, &msg.CreatedAt,
+			&msg.SenderUsername, &msg.SenderAvatar,
+		); err != nil {
 			return nil, err
 		}
 		messages = append(messages, msg)
 	}
 
+	// Reverse to get chronological order
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
 	return messages, nil
 }
 
-// GetConversations retrieves all conversations for a user (optimized)
-func GetConversations(userID string, limit int) ([]map[string]interface{}, error) {
-	query := `
-		WITH latest_messages AS (
-			SELECT DISTINCT ON (
-				CASE 
-					WHEN sender_id = $1 THEN receiver_id 
-					ELSE sender_id 
-				END
-			)
-				CASE 
-					WHEN sender_id = $1 THEN receiver_id 
-					ELSE sender_id 
-				END as partner_id,
-				id, sender_id, receiver_id, content, type, 
-				read_at, created_at
-			FROM messages
-			WHERE sender_id = $1 OR receiver_id = $1
-			ORDER BY 
-				CASE 
-					WHEN sender_id = $1 THEN receiver_id 
-					ELSE sender_id 
-				END,
-				created_at DESC
-		)
-		SELECT 
-			lm.id, lm.sender_id, lm.receiver_id, lm.content, 
-			lm.type, lm.read_at, lm.created_at,
-			p.id as partner_id, p.username as partner_username, 
-			p.avatar as partner_avatar
-		FROM latest_messages lm
-		JOIN profiles p ON p.id = lm.partner_id
-		ORDER BY lm.created_at DESC
-		LIMIT $2
-	`
-
-	rows, err := DB.Query(query, userID, limit)
+// GetConversations retrieves all conversations for a user
+func GetConversations(userID int64) ([]models.Conversation, error) {
+	rows, err := DB.Query(
+		`SELECT DISTINCT 
+			CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END as other_user_id
+		FROM messages m
+		WHERE m.sender_id = ? OR m.receiver_id = ?
+		ORDER BY m.created_at DESC`,
+		userID, userID, userID,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var conversations []map[string]interface{}
-	for rows.Next() {
-		var (
-			msgID, senderID, receiverID, content, msgType string
-			readAt, createdAt                             *time.Time
-			partnerID, partnerUsername, partnerAvatar     string
-		)
+	var conversations []models.Conversation
+	seen := make(map[int64]bool)
 
-		err := rows.Scan(
-			&msgID, &senderID, &receiverID, &content, &msgType,
-			&readAt, &createdAt,
-			&partnerID, &partnerUsername, &partnerAvatar,
-		)
-		if err != nil {
+	for rows.Next() {
+		var otherUserID int64
+		if err := rows.Scan(&otherUserID); err != nil {
 			return nil, err
 		}
 
-		conversations = append(conversations, map[string]interface{}{
-			"id":              msgID,
-			"sender_id":       senderID,
-			"receiver_id":     receiverID,
-			"content":         content,
-			"type":            msgType,
-			"read_at":         readAt,
-			"created_at":      createdAt,
-			"partner_id":      partnerID,
-			"partner_username": partnerUsername,
-			"partner_avatar":  partnerAvatar,
-		})
+		if seen[otherUserID] {
+			continue
+		}
+		seen[otherUserID] = true
+
+		user, err := GetUserByID(otherUserID)
+		if err != nil {
+			continue
+		}
+
+		// Get last message
+		var lastMsg models.Message
+		err = DB.QueryRow(
+			`SELECT id, sender_id, receiver_id, content, type, expires_at, read_at, created_at
+			FROM messages
+			WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+			  AND (expires_at IS NULL OR expires_at > datetime('now'))
+			ORDER BY created_at DESC LIMIT 1`,
+			userID, otherUserID, otherUserID, userID,
+		).Scan(&lastMsg.ID, &lastMsg.SenderID, &lastMsg.ReceiverID, &lastMsg.Content,
+			&lastMsg.Type, &lastMsg.ExpiresAt, &lastMsg.ReadAt, &lastMsg.CreatedAt)
+
+		// Count unread messages
+		var unreadCount int
+		DB.QueryRow(
+			`SELECT COUNT(*) FROM messages
+			WHERE sender_id = ? AND receiver_id = ? AND read_at IS NULL`,
+			otherUserID, userID,
+		).Scan(&unreadCount)
+
+		conv := models.Conversation{
+			User:        user.ToResponse(),
+			UnreadCount: unreadCount,
+		}
+		if err == nil {
+			conv.LastMessage = &lastMsg
+		}
+
+		conversations = append(conversations, conv)
 	}
 
 	return conversations, nil
 }
 
-// MarkMessageAsRead marks a message as read
-func MarkMessageAsRead(messageID, userID string) error {
-	query := `
-		UPDATE messages 
-		SET read_at = NOW() 
-		WHERE id = $1 AND receiver_id = $2 AND read_at IS NULL
-	`
-
-	_, err := DB.Exec(query, messageID, userID)
+// MarkMessagesAsRead marks all messages from a sender to receiver as read
+func MarkMessagesAsRead(senderID, receiverID int64) error {
+	_, err := DB.Exec(
+		"UPDATE messages SET read_at = datetime('now') WHERE sender_id = ? AND receiver_id = ? AND read_at IS NULL",
+		senderID, receiverID,
+	)
 	return err
 }
 
-// UpdateMessage updates a message's content
-func UpdateMessage(messageID, senderID, content string) error {
-	query := `
-		UPDATE messages 
-		SET content = $1, edited = true, updated_at = NOW() 
-		WHERE id = $2 AND sender_id = $3
-	`
-
-	_, err := DB.Exec(query, content, messageID, senderID)
-	return err
-}
-
-// DeleteMessage deletes a message
-func DeleteMessage(messageID, userID string) error {
-	query := `DELETE FROM messages WHERE id = $1 AND sender_id = $2`
-	_, err := DB.Exec(query, messageID, userID)
-	return err
-}
-
-// CleanupExpiredMessages removes all expired messages
-func CleanupExpiredMessages() error {
-	_, err := DB.Exec("SELECT cleanup_expired_messages()")
+// DeleteExpiredMessages removes messages that have expired
+func DeleteExpiredMessages() error {
+	_, err := DB.Exec("DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < datetime('now')")
 	return err
 }
 
 // Friend queries
 
-// CreateFriendRequest creates a new friend request
-func CreateFriendRequest(userID, friendID string) error {
-	query := `
-		INSERT INTO friends (user_id, friend_id, status, created_at) 
-		VALUES ($1, $2, 'pending', NOW())
-	`
-
-	_, err := DB.Exec(query, userID, friendID)
+// CreateFriendRequest creates a friend request
+func CreateFriendRequest(userID, friendID int64) error {
+	_, err := DB.Exec(
+		"INSERT INTO friends (user_id, friend_id, status) VALUES (?, ?, 'pending')",
+		userID, friendID,
+	)
 	return err
+}
+
+// GetFriendship retrieves a friendship record
+func GetFriendship(userID, friendID int64) (*models.Friend, error) {
+	friend := &models.Friend{}
+	err := DB.QueryRow(
+		`SELECT id, user_id, friend_id, status, created_at FROM friends 
+		WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)`,
+		userID, friendID, friendID, userID,
+	).Scan(&friend.ID, &friend.UserID, &friend.FriendID, &friend.Status, &friend.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return friend, nil
+}
+
+// AcceptFriendRequest accepts a pending friend request
+func AcceptFriendRequest(requestID int64, userID int64) error {
+	result, err := DB.Exec(
+		"UPDATE friends SET status = 'accepted' WHERE id = ? AND friend_id = ? AND status = 'pending'",
+		requestID, userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // GetFriends retrieves all accepted friends for a user
-func GetFriends(userID string) ([]models.Friend, error) {
-	query := `
-		SELECT f.id, f.user_id, f.friend_id, f.status, f.created_at,
-		       p.username, p.avatar
-		FROM friends f
-		JOIN profiles p ON p.id = f.friend_id
-		WHERE f.user_id = $1 AND f.status = 'accepted'
-		ORDER BY p.username
-	`
-
-	rows, err := DB.Query(query, userID)
+func GetFriends(userID int64) ([]models.UserResponse, error) {
+	rows, err := DB.Query(
+		`SELECT u.id, u.username, u.email, u.avatar, u.created_at
+		FROM users u
+		JOIN friends f ON (f.user_id = u.id OR f.friend_id = u.id)
+		WHERE ((f.user_id = ? OR f.friend_id = ?) AND f.status = 'accepted')
+		  AND u.id != ?`,
+		userID, userID, userID,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var friends []models.Friend
+	var friends []models.UserResponse
+	seen := make(map[int64]bool)
 	for rows.Next() {
-		var friend models.Friend
-		err := rows.Scan(
-			&friend.ID,
-			&friend.UserID,
-			&friend.FriendID,
-			&friend.Status,
-			&friend.CreatedAt,
-			&friend.Username,
-			&friend.Avatar,
-		)
-		if err != nil {
+		var user models.UserResponse
+		if err := rows.Scan(&user.ID, &user.Username, &user.Email, &user.Avatar, &user.CreatedAt); err != nil {
 			return nil, err
 		}
-		friends = append(friends, friend)
+		if !seen[user.ID] {
+			friends = append(friends, user)
+			seen[user.ID] = true
+		}
 	}
-
 	return friends, nil
 }
 
-// GetFriendRequests retrieves pending friend requests for a user
-func GetFriendRequests(userID string) ([]models.Friend, error) {
-	query := `
-		SELECT f.id, f.user_id, f.friend_id, f.status, f.created_at,
-		       p.username, p.avatar
+// GetPendingFriendRequests retrieves pending friend requests for a user
+func GetPendingFriendRequests(userID int64) ([]models.FriendRequest, error) {
+	rows, err := DB.Query(
+		`SELECT f.id, u.id, u.username, u.email, u.avatar, u.created_at, f.status, f.created_at
 		FROM friends f
-		JOIN profiles p ON p.id = f.user_id
-		WHERE f.friend_id = $1 AND f.status = 'pending'
-		ORDER BY f.created_at DESC
-	`
-
-	rows, err := DB.Query(query, userID)
+		JOIN users u ON f.user_id = u.id
+		WHERE f.friend_id = ? AND f.status = 'pending'`,
+		userID,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var requests []models.Friend
+	var requests []models.FriendRequest
 	for rows.Next() {
-		var friend models.Friend
-		err := rows.Scan(
-			&friend.ID,
-			&friend.UserID,
-			&friend.FriendID,
-			&friend.Status,
-			&friend.CreatedAt,
-			&friend.Username,
-			&friend.Avatar,
-		)
-		if err != nil {
+		var req models.FriendRequest
+		var userCreatedAt time.Time
+		if err := rows.Scan(
+			&req.ID, &req.From.ID, &req.From.Username, &req.From.Email,
+			&req.From.Avatar, &userCreatedAt, &req.Status, &req.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
-		requests = append(requests, friend)
+		req.From.CreatedAt = userCreatedAt
+		requests = append(requests, req)
 	}
-
 	return requests, nil
 }
 
-// UpdateFriendRequest updates a friend request status
-func UpdateFriendRequest(requestID, userID, status string) error {
-	query := `
-		UPDATE friends 
-		SET status = $1 
-		WHERE id = $2 AND friend_id = $3
-	`
-
-	_, err := DB.Exec(query, status, requestID, userID)
-	return err
-}
-
 // DeleteFriend removes a friendship
-func DeleteFriend(userID, friendID string) error {
-	query := `
-		DELETE FROM friends 
-		WHERE (user_id = $1 AND friend_id = $2) 
-		   OR (user_id = $2 AND friend_id = $1)
-	`
-
-	_, err := DB.Exec(query, userID, friendID)
+func DeleteFriend(userID, friendID int64) error {
+	_, err := DB.Exec(
+		"DELETE FROM friends WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)",
+		userID, friendID, friendID, userID,
+	)
 	return err
 }
 
-// SearchUsers searches for users by username (excluding current user and existing friends)
-func SearchUsers(currentUserID, searchQuery string, limit int) ([]models.User, error) {
-	query := `
-		SELECT p.id, p.username, p.avatar
-		FROM profiles p
-		WHERE p.id != $1
-		  AND p.username ILIKE $2
-		  AND NOT EXISTS (
-			SELECT 1 FROM friends f 
-			WHERE (f.user_id = $1 AND f.friend_id = p.id)
-			   OR (f.user_id = p.id AND f.friend_id = $1)
-		  )
-		ORDER BY p.username
-		LIMIT $3
-	`
+// Admin functions
 
-	rows, err := DB.Query(query, currentUserID, "%"+searchQuery+"%", limit)
+// GetAllUsers returns all users with their active session info
+func GetAllUsers() ([]models.UserResponse, error) {
+	rows, err := DB.Query(`
+		SELECT u.id, u.username, u.email, u.avatar, u.created_at, 
+		       COALESCE(u.auth_method, 'email'), COALESCE(u.is_disabled, 0),
+		       CASE WHEN s.id IS NOT NULL THEN 1 ELSE 0 END as online
+		FROM users u
+		LEFT JOIN sessions s ON u.id = s.user_id AND s.expires_at > datetime('now')
+		ORDER BY u.created_at DESC
+	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var users []models.User
+	var users []models.UserResponse
 	for rows.Next() {
-		var user models.User
-		err := rows.Scan(&user.ID, &user.Username, &user.Avatar)
+		var user models.UserResponse
+		err := rows.Scan(&user.ID, &user.Username, &user.Email, &user.Avatar, 
+			&user.CreatedAt, &user.AuthMethod, &user.IsDisabled, &user.Online)
 		if err != nil {
 			return nil, err
 		}
 		users = append(users, user)
 	}
-
 	return users, nil
+}
+
+// DisableUser disables or enables a user account
+func DisableUser(userID int64, disabled bool) error {
+	disabledInt := 0
+	if disabled {
+		disabledInt = 1
+	}
+	_, err := DB.Exec("UPDATE users SET is_disabled = ? WHERE id = ?", disabledInt, userID)
+	return err
+}
+
+// ResetUserPassword resets a user's password
+func ResetUserPassword(userID int64, newPassword string) error {
+	_, err := DB.Exec("UPDATE users SET password = ? WHERE id = ?", newPassword, userID)
+	return err
+}
+
+// DeleteAllUserSessions deletes all sessions for a user (force logout)
+func DeleteAllUserSessions(userID int64) error {
+	_, err := DB.Exec("DELETE FROM sessions WHERE user_id = ?", userID)
+	return err
 }

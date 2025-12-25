@@ -8,38 +8,15 @@ let friends = [];
 let friendRequests = [];
 let disappearingMode = false;
 let messageSubscription = null;
-let isOnline = navigator.onLine;
-let typingTimeout = null;
-let conversationsDebounce = null;
-let friendsDebounce = null;
-let lastConversationsLoad = 0;
-let lastFriendsLoad = 0;
-const DEBOUNCE_DELAY = 500; // ms
-const MIN_RELOAD_INTERVAL = 2000; // ms
 
-// Connection status tracking
-window.addEventListener('online', () => {
-    isOnline = true;
-    updateConnectionStatus();
-    showToast('Back online', 'success');
-});
-
-window.addEventListener('offline', () => {
-    isOnline = false;
-    updateConnectionStatus();
-    showToast('You are offline', 'error');
-});
-
-function updateConnectionStatus() {
-    const statusEl = document.querySelector('.status');
-    if (statusEl) {
-        statusEl.textContent = isOnline ? 'Online' : 'Offline';
-        statusEl.classList.toggle('online', isOnline);
-        statusEl.classList.toggle('offline', !isOnline);
-    }
+// Wait for Supabase to be initialized before running app
+if (window.supabaseClient) {
+    initializeApp();
+} else {
+    window.addEventListener('supabase-ready', initializeApp);
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function initializeApp() {
     // Check authentication
     try {
         const { data: { session } } = await supabaseClient.auth.getSession();
@@ -48,11 +25,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         currentUser = session.user;
-        
-        console.log('User authenticated:', currentUser.email);
 
         // Get user profile
-        const { data: profile, error: profileError } = await supabaseClient
+        const { data: profile } = await supabaseClient
             .from('profiles')
             .select('*')
             .eq('id', currentUser.id)
@@ -60,73 +35,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (profile) {
             currentUserProfile = profile;
-            console.log('Profile loaded:', profile.username);
-            
-            // Check if username is missing, temporary, or email-based (Google OAuth without username)
-            const emailPrefix = currentUser.email.split('@')[0];
-            const hasValidUsername = profile.username && 
-                                    !profile.username.includes('@') && 
-                                    profile.username !== emailPrefix &&
-                                    profile.username.length >= 3 &&
-                                    !profile.username.startsWith('user_');
-            
-            if (!hasValidUsername) {
-                console.log('Invalid username detected, showing setup modal');
-                updateUserProfile(); // Show the current (invalid) username
-                showUsernameSetupModal();
-                return; // Don't load app until username is set
-            }
         } else {
-            console.log('No profile found, creating new profile');
-            // Create profile if doesn't exist with temporary username
-            const tempUsername = 'user_' + currentUser.id.substring(0, 8);
-            const { data: newProfile, error: insertError } = await supabaseClient
+            // Create profile if doesn't exist
+            const username = currentUser.user_metadata?.username || currentUser.email.split('@')[0];
+            const { data: newProfile } = await supabaseClient
                 .from('profiles')
                 .insert({
                     id: currentUser.id,
-                    username: tempUsername,
-                    email: currentUser.email,
+                    username: username,
                     avatar: '',
                     created_at: new Date().toISOString()
                 })
                 .select()
                 .single();
-            
-            if (insertError) {
-                console.error('Profile creation error:', insertError);
-                throw insertError;
-            }
-            
             currentUserProfile = newProfile;
-            console.log('Profile created with temp username:', tempUsername);
-            
-            // Always show username setup for new profiles
-            updateUserProfile();
-            showUsernameSetupModal();
-            return; // Don't load app until username is set
         }
 
-        console.log('Updating user profile display');
         updateUserProfile();
-        console.log('Initializing app');
-        await initializeApp();
     } catch (error) {
         console.error('Auth error:', error);
         window.location.href = '/';
         return;
     }
-});
 
-// Cleanup on page unload to prevent connection leaks
-window.addEventListener('beforeunload', () => {
-    if (messageSubscription) {
-        messageSubscription.unsubscribe();
-    }
-    // Close all Supabase channels
-    supabaseClient.removeAllChannels();
-});
-
-async function initializeApp() {
     // Load initial data
     await Promise.all([
         loadConversations(),
@@ -143,58 +74,38 @@ async function initializeApp() {
 
 function updateUserProfile() {
     if (currentUserProfile) {
-        const usernameElement = document.getElementById('username');
-        const avatarElement = document.getElementById('user-avatar');
-        
-        if (!usernameElement || !avatarElement) {
-            console.error('Profile elements not found in DOM');
-            return;
-        }
-        
-        console.log('Updating profile display:', currentUserProfile.username);
-        usernameElement.textContent = currentUserProfile.username;
-        
-        // Show profile picture if available, otherwise show initial
-        if (currentUserProfile.avatar) {
-            avatarElement.innerHTML = `<img src="${currentUserProfile.avatar}" alt="Profile" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`;
-        } else {
-            avatarElement.innerHTML = '';
-            avatarElement.textContent = currentUserProfile.username.charAt(0).toUpperCase();
-        }
-    } else {
-        console.error('currentUserProfile is null or undefined');
+        document.getElementById('username').textContent = currentUserProfile.username;
+        document.getElementById('user-avatar').textContent = currentUserProfile.username.charAt(0).toUpperCase();
     }
 }
 
 function setupRealtimeSubscription() {
-    // Subscribe to new messages - OPTIMIZED with filter
+    // Subscribe to new messages
     messageSubscription = supabaseClient
         .channel('messages')
         .on('postgres_changes',
-            { 
-                event: 'INSERT', 
-                schema: 'public', 
-                table: 'messages',
-                filter: `receiver_id=eq.${currentUser.id}`
-            },
+            { event: 'INSERT', schema: 'public', table: 'messages' },
             (payload) => {
                 const message = payload.new;
-                // Only append if in current chat
-                if (currentChat && (message.sender_id === currentChat.id || message.receiver_id === currentChat.id)) {
+                // If message is for current user
+                if (message.receiver_id === currentUser.id || message.sender_id === currentUser.id) {
+                    // Only append if you're NOT the sender (to avoid duplicates)
+                    if (currentChat && (message.sender_id === currentChat.id || message.receiver_id === currentChat.id)) {
+                        if (message.sender_id !== currentUser.id) {
+                            appendMessage(message, true);
+                        }
+                    }
+                    // Reload conversations
+                    loadConversations();
+
                     if (message.sender_id !== currentUser.id) {
-                        appendMessage(message, true);
+                        showToast('New message received!', 'success');
                     }
                 }
-                // Debounced reload
-                loadConversations();
             }
         )
         .on('postgres_changes',
-            { 
-                event: 'DELETE', 
-                schema: 'public', 
-                table: 'messages'
-            },
+            { event: 'DELETE', schema: 'public', table: 'messages' },
             (payload) => {
                 const messageId = payload.old.id;
                 // Remove from UI
@@ -202,18 +113,12 @@ function setupRealtimeSubscription() {
                 if (messageElement) {
                     messageElement.remove();
                 }
-                // Debounced reload only if needed
-                if (!currentChat || conversations.length > 0) {
-                    loadConversations();
-                }
+                // Reload conversations
+                loadConversations();
             }
         )
         .on('postgres_changes',
-            { 
-                event: 'UPDATE', 
-                schema: 'public', 
-                table: 'messages'
-            },
+            { event: 'UPDATE', schema: 'public', table: 'messages' },
             (payload) => {
                 const message = payload.new;
                 // Update message in UI if it's in the current chat
@@ -222,7 +127,7 @@ function setupRealtimeSubscription() {
                     if (messageElement && message.edited) {
                         const contentDiv = messageElement.querySelector('.message-content');
                         if (contentDiv) {
-                            contentDiv.innerHTML = linkifyText(message.content);
+                            contentDiv.textContent = message.content;
                             
                             // Add or update edited indicator
                             let editedSpan = messageElement.querySelector('.message-edited');
@@ -238,10 +143,8 @@ function setupRealtimeSubscription() {
                         }
                     }
                 }
-                // Only reload if this message is in a visible conversation
-                if (conversations.some(c => c.user.id === message.sender_id || c.user.id === message.receiver_id)) {
-                    loadConversations();
-                }
+                // Reload conversations to update preview
+                loadConversations();
             }
         )
         .subscribe();
@@ -257,81 +160,16 @@ function setupRealtimeSubscription() {
             }
         )
         .subscribe();
-    
-    // Subscribe to profile updates
-    supabaseClient
-        .channel('profiles')
-        .on('postgres_changes',
-            { event: 'UPDATE', schema: 'public', table: 'profiles' },
-            (payload) => {
-                const updatedProfile = payload.new;
-                
-                // If it's the current user's profile, update it
-                if (updatedProfile.id === currentUser.id) {
-                    currentUserProfile = updatedProfile;
-                    updateUserProfile();
-                }
-                
-                // Only update if the profile change affects visible data
-                if (conversations.some(c => c.user.id === updatedProfile.id)) {
-                    loadConversations();
-                }
-                
-                if (friends.some(f => f.id === updatedProfile.id)) {
-                    loadFriends();
-                }
-                
-                if (friendRequests.some(r => r.from.id === updatedProfile.id)) {
-                    loadFriendRequests();
-                }
-                
-                // If currently chatting with this user, update header only
-                if (currentChat && currentChat.id === updatedProfile.id) {
-                    currentChat.username = updatedProfile.username;
-                    currentChat.avatar = updatedProfile.avatar;
-                    document.getElementById('chat-username').textContent = updatedProfile.username;
-                    const chatAvatarElement = document.getElementById('chat-avatar');
-                    if (updatedProfile.avatar) {
-                        chatAvatarElement.innerHTML = `<img src="${updatedProfile.avatar}" alt="${escapeHtml(updatedProfile.username)}">`;
-                    } else {
-                        chatAvatarElement.textContent = updatedProfile.username.charAt(0).toUpperCase();
-                    }
-                }
-            }
-        )
-        .subscribe();
 }
 
 function setupEventListeners() {
     // Logout
     document.getElementById('logout-btn').addEventListener('click', async () => {
         try {
-            console.log('Logging out...');
-            
-            // Sign out from Supabase
-            const { error } = await supabaseClient.auth.signOut();
-            
-            if (error) {
-                console.error('Logout error:', error);
-                throw error;
-            }
-            
-            console.log('Logout successful');
-            
-            // Clear any local state
-            currentUser = null;
-            currentUserProfile = null;
-            currentChat = null;
-            conversations = [];
-            friends = [];
-            friendRequests = [];
-            
-            // Force redirect to login page
-            window.location.replace('/');
-            
+            await supabaseClient.auth.signOut();
+            window.location.href = '/';
         } catch (error) {
             console.error('Logout failed:', error);
-            showToast('Failed to logout', 'error');
         }
     });
 
@@ -354,12 +192,6 @@ function setupEventListeners() {
         filterConversations(query);
     });
 
-    // Search friends
-    document.getElementById('search-friends').addEventListener('input', (e) => {
-        const query = e.target.value.toLowerCase();
-        filterFriends(query);
-    });
-
     // Add friend
     document.getElementById('add-friend-btn').addEventListener('click', addFriend);
     document.getElementById('add-friend-input').addEventListener('keypress', (e) => {
@@ -376,9 +208,6 @@ function setupEventListeners() {
         currentChat = null;
     });
 
-    // Clear chat button
-    document.getElementById('clear-chat-btn').addEventListener('click', clearChat);
-
     // Toggle disappearing messages
     document.getElementById('toggle-disappear').addEventListener('click', () => {
         disappearingMode = !disappearingMode;
@@ -388,19 +217,11 @@ function setupEventListeners() {
 
     // Send message
     document.getElementById('send-btn').addEventListener('click', sendMessage);
-    
-    const messageInput = document.getElementById('message-input');
-    messageInput.addEventListener('keypress', (e) => {
+    document.getElementById('message-input').addEventListener('keypress', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
         }
-    });
-    
-    // Update send button state based on input
-    messageInput.addEventListener('input', () => {
-        const sendBtn = document.getElementById('send-btn');
-        sendBtn.classList.toggle('has-content', messageInput.value.trim().length > 0);
     });
 
     // Image upload
@@ -414,49 +235,18 @@ function setupEventListeners() {
     document.addEventListener('click', () => {
         document.getElementById('message-context-menu').style.display = 'none';
     });
-    
-    // Keyboard shortcuts
-    document.addEventListener('keydown', (e) => {
-        // Escape to close modals and menus
-        if (e.key === 'Escape') {
-            document.getElementById('message-context-menu').style.display = 'none';
-            closeEditMessageModal();
-            closeProfileEditModal();
-            closeImageViewer();
-            closeFriendRequestModal();
-        }
-        
-        // Focus message input with /
-        if (e.key === '/' && !e.target.closest('input, textarea')) {
-            e.preventDefault();
-            const input = document.getElementById('message-input');
-            if (input && currentChat) {
-                input.focus();
-            }
-        }
-    });
 }
 
 // API Functions using Supabase
 
 async function loadConversations() {
-    // Debounce to prevent excessive calls
-    const now = Date.now();
-    if (now - lastConversationsLoad < MIN_RELOAD_INTERVAL) {
-        if (conversationsDebounce) clearTimeout(conversationsDebounce);
-        conversationsDebounce = setTimeout(loadConversations, DEBOUNCE_DELAY);
-        return;
-    }
-    lastConversationsLoad = now;
-    
     try {
-        // Optimized: Only get recent messages (last 100) with necessary fields
+        // Get messages where user is sender or receiver
         const { data: messages, error } = await supabaseClient
             .from('messages')
-            .select('id, sender_id, receiver_id, content, type, created_at, read_at, sender:profiles!messages_sender_id_fkey(id, username, avatar), receiver:profiles!messages_receiver_id_fkey(id, username, avatar)')
+            .select('*, sender:profiles!messages_sender_id_fkey(*), receiver:profiles!messages_receiver_id_fkey(*)')
             .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
-            .order('created_at', { ascending: false })
-            .limit(100);
+            .order('created_at', { ascending: false });
 
         if (error) throw error;
 
@@ -474,7 +264,7 @@ async function loadConversations() {
                 });
             }
 
-            // Count unread (only in recent messages)
+            // Count unread
             if (msg.sender_id === partnerId && !msg.read_at) {
                 const conv = convMap.get(partnerId);
                 conv.unread_count++;
@@ -489,20 +279,10 @@ async function loadConversations() {
 }
 
 async function loadFriends() {
-    // Debounce to prevent excessive calls
-    const now = Date.now();
-    if (now - lastFriendsLoad < MIN_RELOAD_INTERVAL) {
-        if (friendsDebounce) clearTimeout(friendsDebounce);
-        friendsDebounce = setTimeout(loadFriends, DEBOUNCE_DELAY);
-        return;
-    }
-    lastFriendsLoad = now;
-    
     try {
-        // Optimized: Only select needed fields
         const { data, error } = await supabaseClient
             .from('friends')
-            .select('id, user_id, friend_id, friend:profiles!friends_friend_id_fkey(id, username, avatar), user:profiles!friends_user_id_fkey(id, username, avatar)')
+            .select('*, friend:profiles!friends_friend_id_fkey(*), user:profiles!friends_user_id_fkey(*)')
             .or(`user_id.eq.${currentUser.id},friend_id.eq.${currentUser.id}`)
             .eq('status', 'accepted');
 
@@ -521,13 +301,11 @@ async function loadFriends() {
 
 async function loadFriendRequests() {
     try {
-        // Optimized: Only select needed fields
         const { data, error } = await supabaseClient
             .from('friends')
-            .select('id, user_id, status, created_at, user:profiles!friends_user_id_fkey(id, username, avatar)')
+            .select('*, user:profiles!friends_user_id_fkey(*)')
             .eq('friend_id', currentUser.id)
-            .eq('status', 'pending')
-            .order('created_at', { ascending: false });
+            .eq('status', 'pending');
 
         if (error) throw error;
 
@@ -546,29 +324,23 @@ async function loadFriendRequests() {
 
 async function loadMessages(partnerId) {
     try {
-        // Optimized: Load only last 50 messages, select only needed fields
         const { data: messages, error } = await supabaseClient
             .from('messages')
-            .select('id, sender_id, receiver_id, content, type, created_at, expires_at, edited, updated_at')
+            .select('*, sender:profiles!messages_sender_id_fkey(*)')
             .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${partnerId}),and(sender_id.eq.${partnerId},receiver_id.eq.${currentUser.id})`)
-            .order('created_at', { ascending: false })
-            .limit(50);
+            .order('created_at', { ascending: true });
 
         if (error) throw error;
 
-        // Reverse to show oldest first
-        const sortedMessages = (messages || []).reverse();
-        renderMessages(sortedMessages);
+        renderMessages(messages || []);
 
-        // Mark messages as read (batch operation)
-        const { error: updateError } = await supabaseClient
+        // Mark messages as read
+        await supabaseClient
             .from('messages')
             .update({ read_at: new Date().toISOString() })
             .eq('sender_id', partnerId)
             .eq('receiver_id', currentUser.id)
             .is('read_at', null);
-
-        if (updateError) console.error('Failed to mark messages as read:', updateError);
 
     } catch (error) {
         console.error('Failed to load messages:', error);
@@ -580,9 +352,6 @@ async function sendMessage() {
     const content = input.value.trim();
 
     if (!content || !currentChat) return;
-
-    // Clear input immediately for better UX
-    input.value = '';
 
     try {
         const messageData = {
@@ -597,15 +366,6 @@ async function sendMessage() {
             messageData.expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
         }
 
-        // Optimistic update - show message immediately with temporary ID
-        const tempMessage = { ...messageData, id: 'temp-' + Date.now() };
-        appendMessage(tempMessage, false);
-
-        // Scroll to bottom
-        const container = document.getElementById('messages-container');
-        container.scrollTop = container.scrollHeight;
-
-        // Send to database
         const { data: message, error } = await supabaseClient
             .from('messages')
             .insert(messageData)
@@ -614,17 +374,16 @@ async function sendMessage() {
 
         if (error) throw error;
 
-        // Replace temporary message with real one (update the ID)
-        const tempElement = document.querySelector(`[data-message-id="${tempMessage.id}"]`);
-        if (tempElement) {
-            tempElement.setAttribute('data-message-id', message.id);
-        }
+        appendMessage(message, false);
+        input.value = '';
+
+        // Scroll to bottom
+        const container = document.getElementById('messages-container');
+        container.scrollTop = container.scrollHeight;
 
     } catch (error) {
         console.error('Failed to send message:', error);
         showToast('Failed to send message', 'error');
-        // Restore the message to input on failure
-        input.value = content;
     }
 }
 
@@ -635,52 +394,41 @@ async function handleImageUpload(e) {
         return;
     }
 
-    // Check file size (50MB limit)
-    if (file.size > 50 * 1024 * 1024) {
-        showToast('File must be less than 50MB', 'error');
+    // Check file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+        showToast('Image must be less than 10MB', 'error');
         e.target.value = '';
         return;
     }
 
-    // Check if it's an image or video
-    const isImage = file.type.startsWith('image/');
-    const isVideo = file.type.startsWith('video/');
-    
-    if (!isImage && !isVideo) {
-        showToast('Please select an image or video file', 'error');
+    // Check if it's an image
+    if (!file.type.startsWith('image/')) {
+        showToast('Please select an image file', 'error');
         e.target.value = '';
         return;
     }
 
     try {
-        showToast(isVideo ? 'Uploading video...' : 'Uploading image...', 'success');
+        showToast('Uploading image...', 'success');
 
-        // Convert image/video to base64 and send directly in message
+        // Convert image to base64 and send directly in message
         const reader = new FileReader();
         reader.onload = async function(event) {
             try {
-                const base64Data = event.target.result;
+                const base64Image = event.target.result;
 
-                // Send message with base64 image or video
+                // Send message with base64 image
                 const messageData = {
                     sender_id: currentUser.id,
                     receiver_id: currentChat.id,
-                    content: base64Data,
-                    type: isVideo ? 'video' : 'image',
+                    content: base64Image,
+                    type: 'image',
                     created_at: new Date().toISOString()
                 };
 
                 if (disappearingMode) {
                     messageData.expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
                 }
-
-                // Optimistic update - show media immediately
-                const tempMessage = { ...messageData, id: 'temp-' + Date.now() };
-                appendMessage(tempMessage, false);
-
-                // Scroll to bottom
-                const container = document.getElementById('messages-container');
-                container.scrollTop = container.scrollHeight;
 
                 const { data: message, error } = await supabaseClient
                     .from('messages')
@@ -693,13 +441,12 @@ async function handleImageUpload(e) {
                     throw error;
                 }
 
-                // Replace temporary message with real one
-                const tempElement = document.querySelector(`[data-message-id="${tempMessage.id}"]`);
-                if (tempElement) {
-                    tempElement.setAttribute('data-message-id', message.id);
-                }
+                appendMessage(message, false);
+                showToast('Image sent!', 'success');
 
-                showToast(isVideo ? 'Video sent!' : 'Image sent!', 'success');
+                // Scroll to bottom
+                const container = document.getElementById('messages-container');
+                container.scrollTop = container.scrollHeight;
 
             } catch (error) {
                 console.error('Failed to send image:', error);
@@ -745,12 +492,12 @@ async function addFriend() {
             return;
         }
 
-        // Check if already friends or pending (optimized query)
+        // Check if already friends or pending
         const { data: existing } = await supabaseClient
             .from('friends')
-            .select('id, status')
+            .select('*')
             .or(`and(user_id.eq.${currentUser.id},friend_id.eq.${user.id}),and(user_id.eq.${user.id},friend_id.eq.${currentUser.id})`)
-            .maybeSingle();
+            .single();
 
         if (existing) {
             showToast(existing.status === 'accepted' ? 'Already friends' : 'Request already pending', 'error');
@@ -812,119 +559,28 @@ async function declineFriendRequest(requestId) {
     }
 }
 
-async function removeFriend(friendId, friendUsername) {
-    if (!confirm(`Remove ${friendUsername} from your friends?`)) {
-        return;
-    }
-
-    try {
-        // Find the friendship record (could be either direction)
-        const { data: friendships, error: fetchError } = await supabaseClient
-            .from('friends')
-            .select('id')
-            .eq('status', 'accepted')
-            .or(`and(user_id.eq.${currentUser.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${currentUser.id})`);
-
-        if (fetchError) throw fetchError;
-
-        if (!friendships || friendships.length === 0) {
-            showToast('Friend not found', 'error');
-            return;
-        }
-
-        // Delete the friendship
-        const { error } = await supabaseClient
-            .from('friends')
-            .delete()
-            .eq('id', friendships[0].id);
-
-        if (error) throw error;
-
-        showToast('Friend removed', 'success');
-        await loadFriends();
-
-    } catch (error) {
-        console.error('Error removing friend:', error);
-        showToast('Failed to remove friend', 'error');
-    }
-}
-
-// Clear Chat Function
-async function clearChat() {
-    if (!currentChat) return;
-    
-    if (!confirm(`Clear all messages with ${currentChat.username}? This cannot be undone.`)) {
-        return;
-    }
-    
-    try {
-        // Delete all messages between current user and chat partner (both directions)
-        const { error } = await supabaseClient
-            .from('messages')
-            .delete()
-            .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${currentChat.id}),and(sender_id.eq.${currentChat.id},receiver_id.eq.${currentUser.id})`);
-        
-        if (error) throw error;
-        
-        // Clear UI
-        document.getElementById('messages-list').innerHTML = `
-            <div class="empty-state">
-                <p>No messages yet</p>
-                <span>Say hello! 👋</span>
-            </div>
-        `;
-        
-        showToast('Chat cleared', 'success');
-        
-        // Reload conversations to update the list
-        loadConversations();
-        
-    } catch (error) {
-        console.error('Failed to clear chat:', error);
-        showToast('Failed to clear chat', 'error');
-    }
-}
-
 // Render Functions
 
 function renderConversations() {
     const container = document.getElementById('conversations-list');
 
     if (!conversations || conversations.length === 0) {
-        // Don't show empty state on mobile
-        if (window.innerWidth < 768) {
-            container.innerHTML = '';
-        } else {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">💬</div>
-                    <p>No conversations yet</p>
-                    <span>Add friends to start chatting!</span>
-                </div>
-            `;
-        }
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">💬</div>
+                <p>No conversations yet</p>
+                <span>Add friends to start chatting!</span>
+            </div>
+        `;
         return;
     }
 
-    container.innerHTML = conversations.map(conv => {
-        // Format last message preview
-        let previewText = 'Start a conversation';
-        if (conv.last_message) {
-            if (conv.last_message.type === 'image') {
-                previewText = '📷 Image';
-            } else if (conv.last_message.type === 'video') {
-                previewText = '🎥 Video';
-            } else {
-                previewText = escapeHtml(truncate(conv.last_message.content, 30));
-            }
-        }
-        
-        return `
+    container.innerHTML = conversations.map(conv => `
         <button class="conversation-item ${currentChat && currentChat.id === conv.user.id ? 'active' : ''}" 
                 data-user-id="${conv.user.id}"
                 onclick="openChat('${conv.user.id}')">
             <div class="avatar">
-                ${conv.user.avatar ? `<img src="${escapeHtml(conv.user.avatar)}" alt="Avatar">` : `<span>${conv.user.username.charAt(0).toUpperCase()}</span>`}
+                <span>${conv.user.username.charAt(0).toUpperCase()}</span>
             </div>
             <div class="conversation-info">
                 <div class="conversation-name">
@@ -934,13 +590,12 @@ function renderConversations() {
                     ` : ''}
                 </div>
                 <div class="conversation-preview">
-                    <span>${previewText}</span>
+                    <span>${conv.last_message ? escapeHtml(truncate(conv.last_message.content, 30)) : 'Start a conversation'}</span>
                     ${conv.unread_count > 0 ? `<span class="unread-badge">${conv.unread_count}</span>` : ''}
                 </div>
             </div>
         </button>
-    `;
-    }).join('');
+    `).join('');
 }
 
 function filterConversations(query) {
@@ -948,14 +603,6 @@ function filterConversations(query) {
     items.forEach(item => {
         const username = item.querySelector('.conversation-username').textContent.toLowerCase();
         item.style.display = username.includes(query) ? '' : 'none';
-    });
-}
-
-function filterFriends(query) {
-    const items = document.querySelectorAll('.friends-list .friend-item');
-    items.forEach(item => {
-        const name = item.querySelector('.friend-name').textContent.toLowerCase();
-        item.style.display = name.includes(query) ? '' : 'none';
     });
 }
 
@@ -974,7 +621,7 @@ function renderFriends() {
     container.innerHTML = friends.map(friend => `
         <div class="friend-item">
             <div class="avatar">
-                ${friend.avatar ? `<img src="${escapeHtml(friend.avatar)}" alt="Avatar">` : `<span>${friend.username.charAt(0).toUpperCase()}</span>`}
+                <span>${friend.username.charAt(0).toUpperCase()}</span>
             </div>
             <div class="friend-info">
                 <span class="friend-name">${escapeHtml(friend.username)}</span>
@@ -982,7 +629,6 @@ function renderFriends() {
             </div>
             <div class="friend-actions">
                 <button class="btn-message" onclick="openChat('${friend.id}')">Message</button>
-                <button class="btn-decline" onclick="removeFriend('${friend.id}', '${escapeHtml(friend.username)}')">Remove</button>
             </div>
         </div>
     `).join('');
@@ -1006,11 +652,10 @@ function renderFriendRequests() {
     container.innerHTML = friendRequests.map(req => {
         const username = escapeHtml(req.from.username);
         const initial = req.from.username.charAt(0).toUpperCase();
-        const avatar = req.from.avatar;
         return `
             <div class="friend-item" data-request-id="${req.id}" data-username="${username}" style="cursor: pointer;">
                 <div class="avatar">
-                    ${avatar ? `<img src="${escapeHtml(avatar)}" alt="Avatar">` : `<span>${initial}</span>`}
+                    <span>${initial}</span>
                 </div>
                 <div class="friend-info">
                     <span class="friend-name">${username}</span>
@@ -1069,30 +714,16 @@ function appendMessage(message, received) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Make URLs clickable in messages
-function linkifyText(text) {
-    const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
-    const escaped = escapeHtml(text);
-    return escaped.replace(urlRegex, (url) => {
-        // Decode HTML entities for the href, keep escaped for display
-        const safeUrl = url.replace(/&amp;/g, '&');
-        return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="message-link">${url}</a>`;
-    });
-}
-
 function createMessageHTML(message, received) {
     const hasExpiry = message.expires_at != null;
     const isImage = message.type === 'image';
-    const isVideo = message.type === 'video';
     const isEdited = message.edited || false;
     
     let contentHTML;
     if (isImage) {
         contentHTML = `<img src="${escapeHtml(message.content)}" alt="Image" class="message-image" loading="lazy" onclick="openImageViewer('${escapeHtml(message.content)}')">`;
-    } else if (isVideo) {
-        contentHTML = `<video src="${escapeHtml(message.content)}" class="message-video" controls preload="metadata"></video>`;
     } else {
-        contentHTML = `<div class="message-content">${linkifyText(message.content)}</div>`;
+        contentHTML = `<div class="message-content">${escapeHtml(message.content)}</div>`;
     }
 
     return `
@@ -1151,12 +782,7 @@ window.openChat = async function (partnerId) {
     document.getElementById('sidebar').classList.add('hidden'); // Mobile
 
     // Update chat header
-    const chatAvatarElement = document.getElementById('chat-avatar');
-    if (user.avatar) {
-        chatAvatarElement.innerHTML = `<img src="${user.avatar}" alt="${escapeHtml(user.username)}">`;
-    } else {
-        chatAvatarElement.textContent = user.username.charAt(0).toUpperCase();
-    }
+    document.getElementById('chat-avatar').textContent = user.username.charAt(0).toUpperCase();
     document.getElementById('chat-username').textContent = user.username;
     document.getElementById('chat-status').textContent = 'Online';
 
@@ -1267,78 +893,25 @@ function showMessageContextMenu(event, messageId, isSentByMe) {
     
     menu.style.display = 'block';
     
-    // Improved positioning for both desktop and mobile
-    const menuWidth = 180;
-    const menuHeight = 100; // approximate height
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    
-    let left = event.pageX - menuWidth - 10;
-    let top = event.pageY;
-    
-    // Adjust for mobile - center horizontally if too close to edges
-    if (viewportWidth < 768) {
-        left = Math.max(10, Math.min(left, viewportWidth - menuWidth - 10));
-        top = Math.max(10, Math.min(top, viewportHeight - menuHeight - 10));
-    }
-    
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
+    // Position menu to the left of cursor
+    const menuWidth = 180; // min-width from CSS
+    menu.style.left = (event.pageX - menuWidth - 10) + 'px';
+    menu.style.top = event.pageY + 'px';
     
     // Set up button handlers
     const deleteBtn = document.getElementById('delete-message-btn');
     const editBtn = document.getElementById('edit-message-btn');
     
-    deleteBtn.onclick = () => {
-        deleteMessage(messageId);
-        menu.style.display = 'none';
-    };
-    editBtn.onclick = () => {
-        editMessage(messageId);
-        menu.style.display = 'none';
-    };
-    
-    // Close menu when clicking outside
-    const closeMenu = (e) => {
-        if (!menu.contains(e.target)) {
-            menu.style.display = 'none';
-            document.removeEventListener('click', closeMenu);
-            document.removeEventListener('touchstart', closeMenu);
-        }
-    };
-    
-    // Delay adding the listener to prevent immediate closure
-    setTimeout(() => {
-        document.addEventListener('click', closeMenu);
-        document.addEventListener('touchstart', closeMenu);
-    }, 100);
+    deleteBtn.onclick = () => deleteMessage(messageId);
+    editBtn.onclick = () => editMessage(messageId);
 }
 
 function handleLongPressStart(event, messageId, isSentByMe) {
     if (!isSentByMe) return;
     
-    // Store touch position for mobile
-    const touch = event.touches ? event.touches[0] : event;
-    const touchX = touch.clientX;
-    const touchY = touch.clientY;
-    
     longPressTimer = setTimeout(() => {
-        // Create a synthetic event with the stored position
-        const syntheticEvent = {
-            preventDefault: () => {},
-            pageX: touchX,
-            pageY: touchY,
-            clientX: touchX,
-            clientY: touchY
-        };
-        
         // Trigger context menu on long press
-        showMessageContextMenu(syntheticEvent, messageId, isSentByMe);
-        
-        // Add haptic feedback on mobile if available
-        if (navigator.vibrate) {
-            navigator.vibrate(50);
-        }
+        showMessageContextMenu(event, messageId, isSentByMe);
     }, 500); // 500ms long press
 }
 
@@ -1360,115 +933,55 @@ async function editMessage(messageId) {
         
         // Get current message content
         const contentDiv = messageElement.querySelector('.message-content');
-        if (!contentDiv) {
-            showToast('Cannot edit image messages', 'error');
-            return;
-        }
+        if (!contentDiv) return; // Can't edit image messages
         
         const currentContent = contentDiv.textContent;
         
-        // Show custom edit modal
-        showEditMessageModal(messageId, currentContent);
+        // Prompt for new content
+        const newContent = prompt('Edit message:', currentContent);
+        if (newContent === null || newContent.trim() === '' || newContent === currentContent) {
+            return; // User cancelled or no changes
+        }
         
+        // Update in database
+        const { error } = await supabaseClient
+            .from('messages')
+            .update({ 
+                content: newContent.trim(),
+                edited: true,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', messageId)
+            .eq('sender_id', currentUser.id);
+        
+        if (error) {
+            console.error('Edit error:', error);
+            throw error;
+        }
+        
+        // Update UI
+        contentDiv.textContent = newContent.trim();
+        
+        // Add edited indicator if not present
+        let editedSpan = messageElement.querySelector('.message-edited');
+        if (!editedSpan) {
+            editedSpan = document.createElement('span');
+            editedSpan.className = 'message-edited';
+            editedSpan.textContent = ' (edited)';
+            const timeDiv = messageElement.querySelector('.message-time');
+            if (timeDiv) {
+                timeDiv.appendChild(editedSpan);
+            }
+        }
+        
+        showToast('Message edited', 'success');
+        
+        // Reload conversations to update preview
+        loadConversations();
     } catch (error) {
-        console.error('Failed to open edit message:', error);
-        showToast('Failed to open edit', 'error');
+        console.error('Failed to edit message:', error);
+        showToast('Failed to edit message', 'error');
     }
-}
-
-function showEditMessageModal(messageId, currentContent) {
-    const modal = document.getElementById('edit-message-modal');
-    const form = document.getElementById('edit-message-form');
-    const textarea = document.getElementById('edit-message-textarea');
-    const error = document.getElementById('edit-message-error');
-    
-    modal.style.display = 'flex';
-    textarea.value = currentContent;
-    error.style.display = 'none';
-    
-    // Focus and select text
-    setTimeout(() => {
-        textarea.focus();
-        textarea.select();
-    }, 100);
-    
-    form.onsubmit = async (e) => {
-        e.preventDefault();
-        const newContent = textarea.value.trim();
-        
-        if (newContent === '') {
-            error.textContent = 'Message cannot be empty';
-            error.style.display = 'block';
-            return;
-        }
-        
-        if (newContent === currentContent) {
-            modal.style.display = 'none';
-            return;
-        }
-        
-        try {
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Saving...';
-            
-            // Update in database
-            const { error: updateError } = await supabaseClient
-                .from('messages')
-                .update({ 
-                    content: newContent,
-                    edited: true,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('id', messageId)
-                .eq('sender_id', currentUser.id);
-            
-            if (updateError) {
-                console.error('Edit error:', updateError);
-                throw updateError;
-            }
-            
-            // Update UI
-            const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
-            if (messageElement) {
-                const contentDiv = messageElement.querySelector('.message-content');
-                if (contentDiv) {
-                    contentDiv.textContent = newContent;
-                }
-                
-                // Add edited indicator if not present
-                let editedSpan = messageElement.querySelector('.message-edited');
-                if (!editedSpan) {
-                    editedSpan = document.createElement('span');
-                    editedSpan.className = 'message-edited';
-                    editedSpan.textContent = '(edited)';
-                    const timeDiv = messageElement.querySelector('.message-time');
-                    if (timeDiv) {
-                        timeDiv.insertBefore(editedSpan, timeDiv.firstChild);
-                    }
-                }
-            }
-            
-            modal.style.display = 'none';
-            showToast('Message edited', 'success');
-            
-            // Reload conversations to update preview
-            loadConversations();
-            
-        } catch (err) {
-            console.error('Failed to edit message:', err);
-            error.textContent = 'Failed to edit message';
-            error.style.display = 'block';
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Save';
-        }
-    };
-}
-
-function closeEditMessageModal() {
-    const modal = document.getElementById('edit-message-modal');
-    modal.style.display = 'none';
 }
 
 async function deleteMessage(messageId) {
@@ -1524,257 +1037,3 @@ function closeImageViewer() {
 
 window.openImageViewer = openImageViewer;
 window.closeImageViewer = closeImageViewer;
-
-// Username Setup Modal
-function showUsernameSetupModal() {
-    console.log('showUsernameSetupModal called');
-    const modal = document.getElementById('username-setup-modal');
-    const form = document.getElementById('username-setup-form');
-    const input = document.getElementById('setup-username-input');
-    const error = document.getElementById('username-setup-error');
-    
-    if (!modal) {
-        console.error('Username setup modal not found in DOM');
-        return;
-    }
-    
-    console.log('Displaying username setup modal');
-    modal.style.display = 'flex';
-    input.value = '';
-    error.style.display = 'none';
-    
-    // Focus on input
-    setTimeout(() => input.focus(), 100);
-    
-    // Prevent closing modal by clicking outside
-    modal.onclick = (e) => {
-        if (e.target === modal) {
-            e.stopPropagation();
-            e.preventDefault();
-            console.log('Modal click prevented - username required');
-        }
-    };
-    
-    form.onsubmit = async (e) => {
-        e.preventDefault();
-        const username = input.value.trim();
-        
-        console.log('Username submitted:', username);
-        
-        if (username.length < 3 || username.length > 20) {
-            error.textContent = 'Username must be 3-20 characters';
-            error.style.display = 'block';
-            return;
-        }
-        
-        if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-            error.textContent = 'Username can only contain letters, numbers, and underscores';
-            error.style.display = 'block';
-            return;
-        }
-        
-        try {
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Setting up...';
-            
-            // Check if username exists
-            const { data: existing } = await supabaseClient
-                .from('profiles')
-                .select('id')
-                .eq('username', username)
-                .single();
-            
-            if (existing && existing.id !== currentUser.id) {
-                error.textContent = 'Username already taken';
-                error.style.display = 'block';
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Continue';
-                return;
-            }
-            
-            console.log('Updating username in database...');
-            
-            // Update profile
-            const { error: updateError } = await supabaseClient
-                .from('profiles')
-                .update({ username: username })
-                .eq('id', currentUser.id);
-            
-            if (updateError) {
-                console.error('Update error:', updateError);
-                throw updateError;
-            }
-            
-            console.log('Username updated successfully');
-            
-            currentUserProfile.username = username;
-            updateUserProfile();
-            modal.style.display = 'none';
-            showToast('Username set successfully!', 'success');
-            
-            // Now initialize the app
-            console.log('Initializing app...');
-            await initializeApp();
-            
-        } catch (err) {
-            console.error('Username setup error:', err);
-            error.textContent = 'Failed to set username';
-            error.style.display = 'block';
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Continue';
-        }
-    };
-}
-
-// Profile Edit Modal
-function openProfileEdit() {
-    const modal = document.getElementById('profile-edit-modal');
-    const form = document.getElementById('profile-edit-form');
-    const input = document.getElementById('edit-username-input');
-    const error = document.getElementById('profile-edit-error');
-    const avatarPreview = document.getElementById('profile-avatar-preview');
-    const pictureInput = document.getElementById('profile-picture-input');
-    
-    modal.style.display = 'flex';
-    input.value = currentUserProfile.username;
-    error.style.display = 'none';
-    
-    // Set current avatar
-    if (currentUserProfile.avatar) {
-        avatarPreview.innerHTML = `<img src="${currentUserProfile.avatar}" alt="Profile">`;
-    } else {
-        avatarPreview.textContent = currentUserProfile.username.charAt(0).toUpperCase();
-    }
-    
-    let selectedAvatar = null;
-    
-    // Handle profile picture selection
-    pictureInput.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        
-        // Validate file size (5MB)
-        if (file.size > 5 * 1024 * 1024) {
-            error.textContent = 'Image must be less than 5MB';
-            error.style.display = 'block';
-            return;
-        }
-        
-        // Validate file type
-        if (!file.type.startsWith('image/')) {
-            error.textContent = 'Please select a valid image file';
-            error.style.display = 'block';
-            return;
-        }
-        
-        error.style.display = 'none';
-        
-        // Read and preview the image
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            selectedAvatar = event.target.result;
-            avatarPreview.innerHTML = `<img src="${selectedAvatar}" alt="Profile Preview">`;
-            showToast('Photo selected. Click Save to apply', 'success');
-        };
-        reader.readAsDataURL(file);
-    };
-    
-    form.onsubmit = async (e) => {
-        e.preventDefault();
-        const username = input.value.trim();
-        
-        const usernameChanged = username !== currentUserProfile.username;
-        const avatarChanged = selectedAvatar !== null;
-        
-        if (!usernameChanged && !avatarChanged) {
-            modal.style.display = 'none';
-            return;
-        }
-        
-        if (username.length < 3 || username.length > 20) {
-            error.textContent = 'Username must be 3-20 characters';
-            error.style.display = 'block';
-            return;
-        }
-        
-        if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-            error.textContent = 'Username can only contain letters, numbers, and underscores';
-            error.style.display = 'block';
-            return;
-        }
-        
-        try {
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Saving...';
-            
-            // Check if username exists (only if changed)
-            if (usernameChanged) {
-                const { data: existing } = await supabaseClient
-                    .from('profiles')
-                    .select('id')
-                    .eq('username', username)
-                    .single();
-                
-                if (existing && existing.id !== currentUser.id) {
-                    error.textContent = 'Username already taken';
-                    error.style.display = 'block';
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Save Changes';
-                    return;
-                }
-            }
-            
-            // Prepare update data
-            const updateData = {};
-            if (usernameChanged) {
-                updateData.username = username;
-            }
-            if (avatarChanged) {
-                updateData.avatar = selectedAvatar;
-            }
-            
-            // Update profile
-            const { error: updateError } = await supabaseClient
-                .from('profiles')
-                .update(updateData)
-                .eq('id', currentUser.id);
-            
-            if (updateError) throw updateError;
-            
-            // Update local profile
-            if (usernameChanged) {
-                currentUserProfile.username = username;
-            }
-            if (avatarChanged) {
-                currentUserProfile.avatar = selectedAvatar;
-            }
-            
-            updateUserProfile();
-            modal.style.display = 'none';
-            showToast('Profile updated successfully!', 'success');
-            
-            // Reload conversations to update display
-            loadConversations();
-            
-        } catch (err) {
-            console.error('Profile update error:', err);
-            error.textContent = 'Failed to update profile';
-            error.style.display = 'block';
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Save Changes';
-        }
-    };
-}
-
-function closeProfileEditModal() {
-    const modal = document.getElementById('profile-edit-modal');
-    modal.style.display = 'none';
-}
-
-window.openProfileEdit = openProfileEdit;
-window.closeProfileEditModal = closeProfileEditModal;
-window.closeEditMessageModal = closeEditMessageModal;

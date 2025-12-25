@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +10,17 @@ import (
 
 // Handler is the serverless function entry point for Vercel
 func Handler(w http.ResponseWriter, r *http.Request) {
+	// API endpoint for config
+	if r.URL.Path == "/api/config" {
+		w.Header().Set("Content-Type", "application/json")
+		config := map[string]string{
+			"supabaseUrl":    os.Getenv("SUPABASE_URL"),
+			"supabaseAnonKey": os.Getenv("SUPABASE_ANON_KEY"),
+		}
+		json.NewEncoder(w).Encode(config)
+		return
+	}
+
 	// Serve static files
 	if r.URL.Path == "/" {
 		serveFile(w, r, "static/index.html")
