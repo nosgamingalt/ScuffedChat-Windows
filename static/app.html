@@ -6,6 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>ScuffedChat - Chat</title>
     <link rel="icon" type="image/png" href="/static/faviconV2.png">
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#000000">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="ScuffedSnap">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="/static/faviconV2.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
@@ -220,6 +228,82 @@
         </button>
     </div>
 
+    <!-- Edit Message Modal -->
+    <div class="modal-overlay" id="edit-message-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Message</h3>
+                <button class="btn-close" onclick="closeEditMessageModal()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="edit-message-text">Message</label>
+                    <textarea id="edit-message-text" rows="4" placeholder="Enter your message..." style="width: 100%; padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); color: var(--text-primary); font-family: inherit; font-size: 0.95rem; resize: vertical;"></textarea>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-modal-decline" onclick="closeEditMessageModal()">Cancel</button>
+                <button class="btn-modal-accept" id="confirm-edit-message-btn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Message Modal -->
+    <div class="modal-overlay" id="delete-message-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Delete Message</h3>
+                <button class="btn-close" onclick="closeDeleteMessageModal()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">Are you sure you want to delete this message? This action cannot be undone.</p>
+                <div id="delete-message-preview" style="padding: 12px; background: var(--bg-input); border-radius: var(--radius-md); max-height: 120px; overflow-y: auto;">
+                    <p style="color: var(--text-muted); font-size: 0.9rem; word-wrap: break-word;"></p>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-modal-decline" onclick="closeDeleteMessageModal()">Cancel</button>
+                <button class="btn-modal-accept" id="confirm-delete-message-btn" style="background: var(--error, #ef4444);">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Unfriend Confirmation Modal -->
+    <div class="modal-overlay" id="unfriend-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Remove Friend</h3>
+                <button class="btn-close" onclick="closeUnfriendModal()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-avatar" style="margin-bottom: 16px;">
+                    <span id="unfriend-avatar-text">?</span>
+                </div>
+                <p style="color: var(--text-secondary); margin-bottom: 8px;">Are you sure you want to remove <strong id="unfriend-username-text">this person</strong> from your friends?</p>
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 12px;">⚠️ All chat history between you will be permanently deleted.</p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-modal-decline" onclick="closeUnfriendModal()">Cancel</button>
+                <button class="btn-modal-accept" id="confirm-unfriend-btn" style="background: var(--error, #ef4444);">Remove Friend</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Fullscreen Image Viewer -->
     <div class="image-viewer-overlay" id="image-viewer" style="display: none;" onclick="closeImageViewer()">
         <button class="image-viewer-close" onclick="closeImageViewer()">
@@ -325,6 +409,18 @@
 
     <script src="/static/js/supabase-config.js"></script>
     <script src="/static/js/app.js"></script>
+    <script src="/static/js/websocket.js"></script>
+    
+    <!-- PWA Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/static/sw.js')
+                    .then(reg => console.log('Service Worker registered:', reg.scope))
+                    .catch(err => console.log('Service Worker registration failed:', err));
+            });
+        }
+    </script>
 </body>
 
 </html>

@@ -8,6 +8,7 @@ let friends = [];
 let friendRequests = [];
 let disappearingMode = false;
 let messageSubscription = null;
+let onlineUsers = new Set(); // Track online users
 
 // Wait for Supabase to be initialized before running app
 if (window.supabaseClient) {
@@ -76,6 +77,9 @@ async function initializeApp() {
     // Setup real-time subscription for messages
     setupRealtimeSubscription();
 
+    // Setup WebSocket for online status
+    setupWebSocket();
+
     // Setup event listeners
     setupEventListeners();
 }
@@ -112,10 +116,6 @@ function setupRealtimeSubscription() {
                     }
                     // Reload conversations
                     loadConversations();
-
-                    if (message.sender_id !== currentUser.id) {
-                        showToast('New message received!', 'success');
-                    }
                 }
             }
         )
@@ -175,6 +175,61 @@ function setupRealtimeSubscription() {
             }
         )
         .subscribe();
+}
+
+function setupWebSocket() {
+    // Initialize WebSocket if available
+    if (window.wsClient) {
+        window.wsClient.connect();
+
+        // Listen for online status updates
+        window.wsClient.on('online_status', (payload) => {
+            const { user_id, online } = payload;
+            
+            if (online) {
+                onlineUsers.add(user_id);
+            } else {
+                onlineUsers.delete(user_id);
+            }
+            
+            updateOnlineStatus(user_id, online);
+        });
+    }
+}
+
+function updateOnlineStatus(userId, online) {
+    // Update in conversations list
+    const convItem = document.querySelector(`.conversation-item[data-user-id="${userId}"]`);
+    if (convItem) {
+        const indicator = convItem.querySelector('.online-indicator');
+        if (indicator) {
+            indicator.classList.toggle('offline', !online);
+        }
+    }
+
+    // Update in friends list
+    const friendItem = document.querySelector(`.friend-item[data-user-id="${userId}"]`);
+    if (friendItem) {
+        const statusSpan = friendItem.querySelector('.friend-status');
+        if (statusSpan && statusSpan.textContent === 'Friend') {
+            statusSpan.textContent = online ? 'Online' : 'Offline';
+            statusSpan.style.color = online ? 'var(--accent-green)' : 'var(--text-muted)';
+        }
+    }
+
+    // Update in active chat header
+    if (currentChat && currentChat.id === userId) {
+        const chatStatus = document.getElementById('chat-status');
+        const chatIndicator = document.getElementById('chat-online-indicator');
+        
+        if (chatStatus) {
+            chatStatus.textContent = online ? 'Online' : 'Offline';
+            chatStatus.classList.toggle('online', online);
+        }
+        if (chatIndicator) {
+            chatIndicator.classList.toggle('offline', !online);
+        }
+    }
 }
 
 function setupEventListeners() {
@@ -595,7 +650,9 @@ function renderConversations() {
         return;
     }
 
-    container.innerHTML = conversations.map(conv => `
+    container.innerHTML = conversations.map(conv => {
+        const isOnline = onlineUsers.has(conv.user.id);
+        return `
         <button class="conversation-item ${currentChat && currentChat.id === conv.user.id ? 'active' : ''}" 
                 data-user-id="${conv.user.id}"
                 onclick="openChat('${conv.user.id}')">
@@ -604,6 +661,7 @@ function renderConversations() {
                     `<img src="${conv.user.avatar}" alt="${escapeHtml(conv.user.username)}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">` : 
                     `<span>${conv.user.username.charAt(0).toUpperCase()}</span>`
                 }
+                <span class="online-indicator ${isOnline ? '' : 'offline'}"></span>
             </div>
             <div class="conversation-info">
                 <div class="conversation-name">
@@ -618,7 +676,8 @@ function renderConversations() {
                 </div>
             </div>
         </button>
-    `).join('');
+        `;
+    }).join('');
 }
 
 function filterConversations(query) {
@@ -641,8 +700,10 @@ function renderFriends() {
         return;
     }
 
-    container.innerHTML = friends.map(friend => `
-        <div class="friend-item">
+    container.innerHTML = friends.map(friend => {
+        const isOnline = onlineUsers.has(friend.id);
+        return `
+        <div class="friend-item" data-user-id="${friend.id}">
             <div class="avatar">
                 ${friend.avatar ? 
                     `<img src="${friend.avatar}" alt="${escapeHtml(friend.username)}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">` : 
@@ -651,13 +712,15 @@ function renderFriends() {
             </div>
             <div class="friend-info">
                 <span class="friend-name">${escapeHtml(friend.username)}</span>
-                <span class="friend-status">Friend</span>
+                <span class="friend-status" style="color: ${isOnline ? 'var(--accent-green)' : 'var(--text-muted)'}">${isOnline ? 'Online' : 'Offline'}</span>
             </div>
             <div class="friend-actions">
                 <button class="btn-message" onclick="openChat('${friend.id}')">Message</button>
+                <button class="btn-decline" style="margin-left: 8px;" onclick="showUnfriendModal('${friend.id}', '${escapeHtml(friend.username)}', '${friend.avatar || ''}')">Remove</button>
             </div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 function renderFriendRequests() {
@@ -805,6 +868,9 @@ window.openChat = async function (partnerId) {
 
     currentChat = user;
 
+    // Check online status
+    const isOnline = onlineUsers.has(partnerId);
+
     // Update UI
     document.getElementById('chat-empty').classList.add('hidden');
     document.getElementById('chat-active').classList.remove('hidden');
@@ -818,7 +884,13 @@ window.openChat = async function (partnerId) {
         chatAvatar.textContent = user.username.charAt(0).toUpperCase();
     }
     document.getElementById('chat-username').textContent = user.username;
-    document.getElementById('chat-status').textContent = 'Online';
+    
+    const chatStatus = document.getElementById('chat-status');
+    chatStatus.textContent = isOnline ? 'Online' : 'Offline';
+    chatStatus.classList.toggle('online', isOnline);
+    
+    const chatIndicator = document.getElementById('chat-online-indicator');
+    chatIndicator.classList.toggle('offline', !isOnline);
 
     // Update active conversation
     document.querySelectorAll('.conversation-item').forEach(item => {
@@ -971,47 +1043,61 @@ async function editMessage(messageId) {
         
         const currentContent = contentDiv.textContent;
         
-        // Prompt for new content
-        const newContent = prompt('Edit message:', currentContent);
-        if (newContent === null || newContent.trim() === '' || newContent === currentContent) {
-            return; // User cancelled or no changes
-        }
+        // Show edit modal
+        const modal = document.getElementById('edit-message-modal');
+        const textarea = document.getElementById('edit-message-text');
+        textarea.value = currentContent;
+        modal.style.display = 'flex';
+        textarea.focus();
         
-        // Update in database
-        const { error } = await window.supabaseClient
-            .from('messages')
-            .update({ 
-                content: newContent.trim(),
-                edited: true,
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', messageId)
-            .eq('sender_id', currentUser.id);
-        
-        if (error) {
-            console.error('Edit error:', error);
-            throw error;
-        }
-        
-        // Update UI
-        contentDiv.textContent = newContent.trim();
-        
-        // Add edited indicator if not present
-        let editedSpan = messageElement.querySelector('.message-edited');
-        if (!editedSpan) {
-            editedSpan = document.createElement('span');
-            editedSpan.className = 'message-edited';
-            editedSpan.textContent = ' (edited)';
-            const timeDiv = messageElement.querySelector('.message-time');
-            if (timeDiv) {
-                timeDiv.appendChild(editedSpan);
+        // Set up confirm handler
+        const confirmBtn = document.getElementById('confirm-edit-message-btn');
+        confirmBtn.onclick = async () => {
+            const newContent = textarea.value.trim();
+            
+            if (newContent === '' || newContent === currentContent) {
+                closeEditMessageModal();
+                return; // No changes
             }
-        }
-        
-        showToast('Message edited', 'success');
-        
-        // Reload conversations to update preview
-        loadConversations();
+            
+            // Update in database
+            const { error } = await window.supabaseClient
+                .from('messages')
+                .update({ 
+                    content: newContent,
+                    edited: true,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', messageId)
+                .eq('sender_id', currentUser.id);
+            
+            if (error) {
+                console.error('Edit error:', error);
+                showToast('Failed to edit message', 'error');
+                return;
+            }
+            
+            // Update UI
+            contentDiv.textContent = newContent;
+            
+            // Add edited indicator if not present
+            let editedSpan = messageElement.querySelector('.message-edited');
+            if (!editedSpan) {
+                editedSpan = document.createElement('span');
+                editedSpan.className = 'message-edited';
+                editedSpan.textContent = ' (edited)';
+                const timeDiv = messageElement.querySelector('.message-time');
+                if (timeDiv) {
+                    timeDiv.appendChild(editedSpan);
+                }
+            }
+            
+            showToast('Message edited', 'success');
+            closeEditMessageModal();
+            
+            // Reload conversations to update preview
+            loadConversations();
+        };
     } catch (error) {
         console.error('Failed to edit message:', error);
         showToast('Failed to edit message', 'error');
@@ -1020,40 +1106,144 @@ async function editMessage(messageId) {
 
 async function deleteMessage(messageId) {
     try {
-        // Delete from database - only if you're the sender
-        const { error } = await window.supabaseClient
-            .from('messages')
-            .delete()
-            .eq('id', messageId)
-            .eq('sender_id', currentUser.id);
-
-        if (error) {
-            console.error('Delete error:', error);
-            throw error;
-        }
-
-        // Remove from UI
-        const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
-        if (messageElement) {
-            messageElement.remove();
-        }
-
         // Hide context menu
         document.getElementById('message-context-menu').style.display = 'none';
         
-        showToast('Message deleted', 'success');
+        // Get the message element
+        const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageElement) return;
         
-        // Reload conversations to update preview
-        loadConversations();
+        // Get message content for preview
+        const contentDiv = messageElement.querySelector('.message-content');
+        const messagePreview = contentDiv ? contentDiv.textContent : '[Image]';
+        
+        // Show delete modal
+        const modal = document.getElementById('delete-message-modal');
+        const previewEl = document.querySelector('#delete-message-preview p');
+        previewEl.textContent = messagePreview;
+        modal.style.display = 'flex';
+        
+        // Set up confirm handler
+        const confirmBtn = document.getElementById('confirm-delete-message-btn');
+        confirmBtn.onclick = async () => {
+            // Delete from database - only if you're the sender
+            const { error } = await window.supabaseClient
+                .from('messages')
+                .delete()
+                .eq('id', messageId)
+                .eq('sender_id', currentUser.id);
+
+            if (error) {
+                console.error('Delete error:', error);
+                showToast('Failed to delete message', 'error');
+                closeDeleteMessageModal();
+                return;
+            }
+
+            // Remove from UI
+            if (messageElement) {
+                messageElement.remove();
+            }
+            
+            showToast('Message deleted', 'success');
+            closeDeleteMessageModal();
+            
+            // Reload conversations to update preview
+            loadConversations();
+        };
     } catch (error) {
         console.error('Failed to delete message:', error);
         showToast('Failed to delete message', 'error');
     }
 }
 
+function closeEditMessageModal() {
+    const modal = document.getElementById('edit-message-modal');
+    modal.style.display = 'none';
+    document.getElementById('edit-message-text').value = '';
+}
+
+function closeDeleteMessageModal() {
+    const modal = document.getElementById('delete-message-modal');
+    modal.style.display = 'none';
+}
+
+let unfriendUserId = null;
+
+function showUnfriendModal(userId, username, avatar) {
+    unfriendUserId = userId;
+    const modal = document.getElementById('unfriend-modal');
+    const usernameText = document.getElementById('unfriend-username-text');
+    const avatarElement = document.getElementById('unfriend-avatar-text');
+    
+    usernameText.textContent = username;
+    avatarElement.textContent = username.charAt(0).toUpperCase();
+    
+    modal.style.display = 'flex';
+    
+    // Set up confirm button
+    const confirmBtn = document.getElementById('confirm-unfriend-btn');
+    confirmBtn.onclick = () => unfriendUser(userId);
+}
+
+function closeUnfriendModal() {
+    const modal = document.getElementById('unfriend-modal');
+    modal.style.display = 'none';
+    unfriendUserId = null;
+}
+
+async function unfriendUser(friendId) {
+    try {
+        // Delete all messages between the two users
+        const { error: messagesError } = await supabaseClient
+            .from('messages')
+            .delete()
+            .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${currentUser.id})`);
+        
+        if (messagesError) {
+            console.error('Error deleting messages:', messagesError);
+            showToast('Failed to delete messages', 'error');
+            return;
+        }
+
+        // Delete the friend relationship
+        const { error: friendError } = await supabaseClient
+            .from('friends')
+            .delete()
+            .or(`and(user_id.eq.${currentUser.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${currentUser.id})`);
+        
+        if (friendError) {
+            console.error('Error removing friend:', friendError);
+            showToast('Failed to remove friend', 'error');
+            return;
+        }
+
+        closeUnfriendModal();
+        
+        // Reload friends list and conversations
+        await loadFriends();
+        loadConversations();
+        
+        // If currently chatting with this person, close the chat
+        if (selectedUserId === friendId) {
+            selectedUserId = null;
+            document.getElementById('chat-area').classList.remove('active');
+        }
+        
+        showToast('Friend removed successfully', 'success');
+    } catch (error) {
+        console.error('Error unfriending user:', error);
+        showToast('Failed to remove friend', 'error');
+    }
+}
+
 window.showMessageContextMenu = showMessageContextMenu;
 window.handleLongPressStart = handleLongPressStart;
 window.handleLongPressEnd = handleLongPressEnd;
+window.closeEditMessageModal = closeEditMessageModal;
+window.closeDeleteMessageModal = closeDeleteMessageModal;
+window.showUnfriendModal = showUnfriendModal;
+window.closeUnfriendModal = closeUnfriendModal;
 
 function openImageViewer(imageSrc) {
     const viewer = document.getElementById('image-viewer');
