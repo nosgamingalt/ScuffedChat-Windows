@@ -1317,8 +1317,8 @@ async function deleteConversation(userId) {
         await loadConversations();
         
         // If currently viewing this chat, close it
-        if (selectedUserId === userId) {
-            selectedUserId = null;
+        if (currentChat && currentChat.id === userId) {
+            currentChat = null;
             document.getElementById('chat-area').classList.remove('active');
         }
         
@@ -1385,8 +1385,8 @@ async function unfriendUser(friendId) {
         loadConversations();
         
         // If currently chatting with this person, close the chat
-        if (selectedUserId === friendId) {
-            selectedUserId = null;
+        if (currentChat && currentChat.id === friendId) {
+            currentChat = null;
             document.getElementById('chat-area').classList.remove('active');
         }
         
